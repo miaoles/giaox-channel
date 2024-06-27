@@ -10,7 +10,7 @@
   #:use-module (gnu packages pkg-config)
   #:use-module (gnu packages xdisorg)
   #:use-module (gnu packages vulkan)
-  #:use-module (boost boost))
+  #:use-module (giaox packages boost))
 
 (define-public chatterino2
   (package

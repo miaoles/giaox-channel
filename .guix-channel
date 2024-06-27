@@ -1,0 +1,7 @@
+(channel
+  (version 0)
+  (url "https://github.com/miaoles/giaox-channel.git")
+  (dependencies
+   (channel
+    (name guix)
+    (url "https://git.savannah.gnu.org/git/guix.git"))))
