@@ -1,4 +1,4 @@
-(define-module (boost boost)
+(define-module (giaox packages boost)
   #:use-module (guix packages)
   #:use-module (gnu packages boost)
   #:use-module (guix download))
