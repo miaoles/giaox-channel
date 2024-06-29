@@ -132,16 +132,16 @@ modules provided by CMake to find common software.  In addition, it provides
 common build settings used in software produced by the KDE community.")
     (license license:bsd-3)))
 
-(define-public kwindowsystem
+(define-public kwindowsystem-custom
   (package
-    (name "kwindowsystem")
+    (name "kwindowsystem-custom")
     (version "6.3.0")
     (source (origin
               (method url-fetch)
               (uri (string-append
                     "mirror://kde/stable/frameworks/"
                     (version-major+minor version) "/"
-                    name "-" version ".tar.xz"))
+                    "kwindowsystem" "-" version ".tar.xz"))
               (sha256
                (base32
                 "1fdax3c2q3fm56pvr99z0rwf1nwz7jmksblj9d42gg1l55ckrqs0"))))
@@ -196,4 +196,4 @@ interaction with the windowing system.")
     (license license:lgpl2.1+)))
 
 ;;extra-cmake-modules
-kwindowsystem
+kwindowsystem-custom
