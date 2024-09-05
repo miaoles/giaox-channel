@@ -49,7 +49,7 @@
        (file-type (and (file-regular? full-path)
         (get-file-type file file-types))))
       (when file-type
-       (let ((dest-dir (car file-type)))
+       (let ((dest-dir (car (cdr file-type))))
         (move-file full-path (string-append dest-dir "/" file))))))
      files)))
   (define (watch-and-organize config)
