@@ -1,6 +1,6 @@
 (define-module (giaox services file-organizer)
  #:use-module (gnu home services)
- #:use-module (gnu packages shepherd)
+ #:use-module (gnu home services shepherd)
  #:use-module (gnu services configuration)
  #:use-module (guix gexp)
  #:use-module (guix records)
