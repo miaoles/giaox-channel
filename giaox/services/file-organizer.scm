@@ -5,6 +5,7 @@
  #:use-module (guix gexp)
  #:use-module (guix records)
  #:use-module (ice-9 match)
+ #:use-module (srfi srfi-1)
  #:export (file-organizer-configuration
            file-organizer-service-type))
 
@@ -75,7 +76,7 @@
      home-activation-service-type
      file-organizer-activation)))
   (default-value (file-organizer-configuration))
-  (compose concatenate)
+  (compose identity)  ; Changed from concatenate to identity
   (extend
    (lambda (config extra-config)
     (file-organizer-configuration
