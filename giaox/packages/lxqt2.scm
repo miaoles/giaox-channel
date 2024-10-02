@@ -28,7 +28,7 @@
 ;;; You should have received a copy of the GNU General Public License
 ;;; along with GNU Guix.  If not, see <http://www.gnu.org/licenses/>.
 
-(define-module (giaox packages lxqt)
+(define-module (giaox packages lxqt2)
   #:use-module (guix download)
   #:use-module (guix git-download)
   #:use-module ((guix licenses) #:prefix license:)
@@ -1170,7 +1170,7 @@ easily publishing them on internet image hosting services.")
         (uri (string-append "https://github.com/lxqt/" name "/releases/download/"
                            version "/" name "-" version ".tar.xz"))
         (sha256
-          (base32 "096fjx86w413k8z8vhmk44k08d25dmagv6w4gc88hpqq4r81klr9"))))
+          (base32 "0qv5b4scq3zv4gvrd5gv343k32qm6ycx42vcfzc3ccm1nsfaylj1"))))
     (build-system cmake-build-system)
     (inputs
       (list glib json-glib libfm-qt qtbase qtx11extras))
@@ -1265,9 +1265,9 @@ and PCManFM-Qt/libfm-qt.")
 
 ;; The LXQt Desktop Environment
 
-(define-public lxqt
+(define-public lxqt2
   (package
-    (name "lxqt")
+    (name "lxqt2")
     (version (package-version liblxqt))
     (source #f)
     (build-system trivial-build-system)
