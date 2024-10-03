@@ -1313,4 +1313,4 @@ and PCManFM-Qt/libfm-qt.")
     (home-page "https://lxqt-project.org")
     (license license:gpl2+)))
 
-lxqt
+lxqt2
