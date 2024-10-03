@@ -1145,7 +1145,7 @@ QTermWidget.")
        (uri (string-append "https://github.com/lxqt/screengrab/releases/download/"
                            version "/screengrab-" version ".tar.xz"))
        (sha256
-        (base32 "0xc004h7i2hnl3jj4p8v6wkqav2v07k1mzdvys3ya171z4ffmc9j"))))
+        (base32 "1cx8gfn97vgn5ayzjw6dvvk7hlbdc95z44jmp8ddb7fl6kl6wr2c"))))
     (build-system cmake-build-system)
     (inputs
      (list kwindowsystem libqtxdg qtbase qtsvg qtx11extras))
