@@ -25,14 +25,14 @@
     (build-system gnu-build-system)
     (arguments
      `(#:tests? #f
-       #:make-flags (list (string-append "LLVM_CONFIG="
-                                       (assoc-ref %build-inputs "llvm")
-                                       "/bin/llvm-config"))
        #:phases
        (modify-phases %standard-phases
          (delete 'configure)
          (replace 'build
            (lambda* (#:key inputs #:allow-other-keys)
+             (setenv "LLVM_CONFIG"
+                     (string-append (assoc-ref inputs "llvm")
+                                  "/bin/llvm-config"))
              (setenv "CXX"
                      (string-append (assoc-ref inputs "clang-toolchain")
                                   "/bin/clang++"))
@@ -50,29 +50,24 @@
                 '("base" "core" "vendor" "shared"))
 
                ;; Compile core vendor libraries
-               (let ((gcc (string-append (assoc-ref inputs "gcc") "/bin/gcc")))
-                 (setenv "CC" gcc)
-                 (for-each
-                  (lambda (lib)
-                    (with-directory-excursion
-                     (string-append share "/vendor/" lib "/src")
-                     (invoke "make")))
-                  '("cgltf" "stb" "miniaudio")))
+               (setenv "CC" (string-append (assoc-ref inputs "gcc") "/bin/gcc"))
+               (for-each
+                (lambda (lib)
+                  (with-directory-excursion
+                   (string-append share "/vendor/" lib "/src")
+                   (invoke "make")))
+                '("cgltf" "stb" "miniaudio"))
 
-               ;; Create wrapper that sets up the build environment
+               ;; Wrap with minimal required environment
                (wrap-program (string-append bin "/odin")
                  `("PATH" prefix
                    (,(string-append (assoc-ref inputs "clang-toolchain") "/bin")))
-                 `("ODIN_ROOT" = (,share))
-                 `("LD_LIBRARY_PATH" = ("${LD_LIBRARY_PATH:+$LD_LIBRARY_PATH:}")))
-               #t))))))
+                 `("ODIN_ROOT" = (,share)))))))))
     (native-inputs
      (list llvm-18
+           gcc
            which
-           python-minimal
-           gcc))
-    (inputs
-     (list gnu-make))
+           python-minimal))
     (propagated-inputs
      (list clang-toolchain-18))
     (home-page "https://odin-lang.org/")
