@@ -25,16 +25,16 @@
     (build-system gnu-build-system)
     (arguments
      `(#:tests? #f
+       #:make-flags (list (string-append "LLVM_CONFIG="
+                                       (assoc-ref %build-inputs "llvm")
+                                       "/bin/llvm-config"))
        #:phases
        (modify-phases %standard-phases
          (delete 'configure)
          (replace 'build
            (lambda* (#:key inputs #:allow-other-keys)
-             (setenv "LLVM_CONFIG"
-                     (string-append (assoc-ref inputs "llvm")
-                                  "/bin/llvm-config"))
              (setenv "CXX"
-                     (string-append (assoc-ref inputs "clang")
+                     (string-append (assoc-ref inputs "clang-toolchain")
                                   "/bin/clang++"))
              (invoke "sh" "build_odin.sh" "release")))
          (replace 'install
@@ -49,31 +49,32 @@
                   (copy-recursively dir (string-append share "/" dir)))
                 '("base" "core" "vendor" "shared"))
 
-               ;; Set compiler environment for vendor compilation
-               (setenv "CC" (string-append (assoc-ref inputs "gcc") "/bin/gcc"))
-
                ;; Compile core vendor libraries
-               (with-directory-excursion (string-append share "/vendor/cgltf/src")
-                 (invoke "make"))
-               (with-directory-excursion (string-append share "/vendor/stb/src")
-                 (invoke "make"))
-               (with-directory-excursion (string-append share "/vendor/miniaudio/src")
-                 (invoke "make"))
+               (let ((gcc (string-append (assoc-ref inputs "gcc") "/bin/gcc")))
+                 (setenv "CC" gcc)
+                 (for-each
+                  (lambda (lib)
+                    (with-directory-excursion
+                     (string-append share "/vendor/" lib "/src")
+                     (invoke "make")))
+                  '("cgltf" "stb" "miniaudio")))
 
-               ;; Create wrapper with necessary environment
+               ;; Create wrapper that sets up the build environment
                (wrap-program (string-append bin "/odin")
                  `("PATH" prefix
                    (,(string-append (assoc-ref inputs "clang-toolchain") "/bin")))
-                 `("ODIN_ROOT" = (,share)))))))))
+                 `("ODIN_ROOT" = (,share))
+                 `("LD_LIBRARY_PATH" = ("${LD_LIBRARY_PATH:+$LD_LIBRARY_PATH:}")))
+               #t))))))
     (native-inputs
      (list llvm-18
            which
            python-minimal
-           gcc))  ; For vendor compilation
+           gcc))
     (inputs
-     (list clang-toolchain-18  ; Complete toolchain for runtime compilation
-           clang-18
-           gnu-make))
+     (list gnu-make))
+    (propagated-inputs
+     (list clang-toolchain-18))
     (home-page "https://odin-lang.org/")
     (synopsis "Fast, concise, readable, pragmatic programming language")
     (description
