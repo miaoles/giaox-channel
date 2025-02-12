@@ -17,7 +17,7 @@
        (method git-fetch)
        (uri (git-reference
              (url "https://github.com/DanielGavin/ols")
-             (commit "a71caaac9f8ac113d81fc714a41c9b9e96d1fee7")))
+             (commit "1177a100fdee44dcbb025982e84e33adb34e9d8f")))
        (file-name (git-file-name name version))
        (sha256
         (base32 "1hc5s3jjg90h9189cx9y8j5z3dqfyqddjn7431a3gi5bjdnhli39"))))

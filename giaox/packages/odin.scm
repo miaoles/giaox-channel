@@ -12,7 +12,7 @@
 (define-public odin
   (package
     (name "odin")
-    (version "dev-2025-01")
+    (version "dev-2025-02")
     (source
      (origin
        (method git-fetch)
@@ -21,7 +21,7 @@
              (commit version)))
        (file-name (git-file-name name version))
        (sha256
-        (base32 "17xgyr0xsg3bdfn472kniyld813vprm8g0x99qhj05w8wgirlxqr"))))
+        (base32 "12y4rjssfryyyjxkkjnx32363xf6nmd6hnxgbl235z487jla9ag0"))))
     (build-system gnu-build-system)
     (arguments
      `(#:tests? #f
