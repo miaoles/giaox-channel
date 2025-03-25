@@ -7,12 +7,13 @@
   #:use-module (gnu packages tls)
   #:use-module (gnu packages pkg-config)
   #:use-module (gnu packages web)
+  #:use-module (gnu packages gnome)
   #:use-module (giaox packages boost))
 
 (define-public chatterino2
   (package
     (name "chatterino2")
-    (version "2.5.2")
+    (version "2.5.3")
     (source (origin
               (method git-fetch)
               (uri (git-reference
@@ -22,13 +23,13 @@
               (file-name (git-file-name name version))
               (sha256
                (base32
-                "1v1nd3pzghsx9fm1x2im0wmi01anfzm0pk4mdp6g736h1rskig4y"))))
+                "1fs13vdxbq2dbxr21wp9mvn33bhvnmg17rqdd6yawsgslab2lssv"))))
     (build-system cmake-build-system)
     (arguments
      `(#:tests? #f
        #:configure-flags '("-DBUILD_WITH_QT6=ON"
-                           "-DUSE_SEVENTV=ON"
-                           "-DBUILD_WITH_QTKEYCHAIN=OFF")
+                          "-DUSE_SEVENTV=ON"
+                          "-DBUILD_WITH_QTKEYCHAIN=OFF")
        #:phases
        (modify-phases %standard-phases
          (add-after 'unpack 'fix-build-and-update-7tv
@@ -48,7 +49,7 @@
                  `("QT_PLUGIN_PATH" ":" prefix
                    ,(map (lambda (label)
                            (string-append (assoc-ref inputs label)
-                                          "/lib/qt6/plugins"))
+                                        "/lib/qt6/plugins"))
                          '("qtsvg" "qtimageformats"))))))))))
     (native-inputs
      (list pkg-config))
@@ -60,7 +61,8 @@
            qt5compat
            boost
            openssl
-           rapidjson))
+           rapidjson
+           libnotify))
     (home-page "https://github.com/Chatterino/chatterino2")
     (synopsis "Chat client for Twitch chat")
     (description

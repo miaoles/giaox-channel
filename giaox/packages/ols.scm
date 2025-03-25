@@ -11,16 +11,16 @@
 (define-public ols
   (package
     (name "ols")
-    (version "0-unstable-2025-01-28")
+    (version "0-unstable-2025-03-12")
     (source
      (origin
        (method git-fetch)
        (uri (git-reference
              (url "https://github.com/DanielGavin/ols")
-             (commit "1177a100fdee44dcbb025982e84e33adb34e9d8f")))
+             (commit "1e44e3d78ad8a74ef09c7f54a6f6d3f7df517f8e")))
        (file-name (git-file-name name version))
        (sha256
-        (base32 "1hc5s3jjg90h9189cx9y8j5z3dqfyqddjn7431a3gi5bjdnhli39"))))
+        (base32 "16f7b8ijcaj5m2bdgbbl1q1mzgpgzzazrap2g17hkgy63aqq8qmf"))))
     (build-system gnu-build-system)
     (arguments
      `(#:tests? #f
