@@ -12,7 +12,7 @@
 (define-public odin
   (package
     (name "odin")
-    (version "dev-2025-03")
+    (version "dev-2025-04")
     (source
      (origin
        (method git-fetch)
@@ -21,7 +21,7 @@
              (commit version)))
        (file-name (git-file-name name version))
        (sha256
-        (base32 "09m6ad3i7gph63p4jxx63abfqrhzdh9cnrf7lqayg5k02rpclrj2"))))
+        (base32 "0sfgbw4m4a10yvbwqpia7jwff8rlbjb16kkzvnr04xld0qrbnl3m"))))
     (build-system gnu-build-system)
     (arguments
      `(#:tests? #f
@@ -42,14 +42,11 @@
              (let* ((out (assoc-ref outputs "out"))
                     (bin (string-append out "/bin"))
                     (share (string-append out "/share")))
-               ;; Install main executable and libraries
                (install-file "odin" bin)
                (for-each
                 (lambda (dir)
                   (copy-recursively dir (string-append share "/" dir)))
                 '("base" "core" "vendor" "shared"))
-
-               ;; Compile core vendor libraries
                (setenv "CC" (string-append (assoc-ref inputs "gcc") "/bin/gcc"))
                (for-each
                 (lambda (lib)
@@ -57,8 +54,6 @@
                    (string-append share "/vendor/" lib "/src")
                    (invoke "make")))
                 '("cgltf" "stb" "miniaudio"))
-
-               ;; Wrap with minimal required environment
                (wrap-program (string-append bin "/odin")
                  `("PATH" prefix
                    (,(string-append (assoc-ref inputs "clang-toolchain") "/bin")))
