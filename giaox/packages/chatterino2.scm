@@ -18,7 +18,8 @@
               (method git-fetch)
               (uri (git-reference
                     (url "https://github.com/Chatterino/chatterino2")
-                    (commit (string-append "v" version))
+                    ;; Use exact commit hash for v2.5.3
+                    (commit "3f3a31db4ddf3b634eff78b3201f15e6b8ce7b14")
                     (recursive? #t)))
               (file-name (git-file-name name version))
               (sha256
@@ -71,4 +72,5 @@ improved/extended version of the Twitch web chat.  Chatterino 2 is the second
 installment of the Twitch chat client series \"Chatterino\".")
     (license expat)))
 
+;; This allows building with "guix build -f"
 chatterino2
