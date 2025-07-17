@@ -9,13 +9,15 @@
   #:use-module (gnu packages elf)
   #:use-module (gnu packages gtk)
   #:use-module (gnu packages gl)
-  #:use-module (gnu packages linux)
   #:use-module (gnu packages xorg)
   #:use-module (gnu packages pulseaudio)
   #:use-module (gnu packages fontutils)
   #:use-module (gnu packages nss)
   #:use-module (gnu packages audio)
-  #:use-module (gnu packages xml))
+  #:use-module (gnu packages xml)
+  #:use-module (gnu packages glib)
+  #:use-module (gnu packages linux)
+  #:use-module (gnu packages compression))
 
 (define-public albion-online
   (package
@@ -68,7 +70,18 @@ export LD_LIBRARY_PATH=\"~a\"
 # Run the installer
 echo \"Installing Albion Online to $INSTALL_DIR\"
 echo \"If prompted, please select this directory: $INSTALL_DIR\"
-exec \"~a/albion-online-setup\" \"$@\"
+\"~a/albion-online-setup\" \"$@\"
+
+# After installation, patch the game executable
+if [ -f \"$INSTALL_DIR/launcher/Albion-Online\" ]; then
+  echo \"Patching game executable...\"
+  ~a --set-interpreter ~a/lib/ld-linux-x86-64.so.2 \"$INSTALL_DIR/launcher/Albion-Online\" || true
+  # Also patch QtWebEngineProcess if it exists
+  if [ -f \"$INSTALL_DIR/launcher/QtWebEngineProcess\" ]; then
+    ~a --set-interpreter ~a/lib/ld-linux-x86-64.so.2 \"$INSTALL_DIR/launcher/QtWebEngineProcess\" || true
+  fi
+  echo \"Patching complete.\"
+fi
 "
                        (assoc-ref %build-inputs "bash")
                        (string-join
@@ -77,7 +90,11 @@ exec \"~a/albion-online-setup\" \"$@\"
                              '("glibc" "gcc:lib" "libx11" "libxext" "libxrender"
                                "mesa" "gtk+" "pango" "freetype" "fontconfig"))
                         ":")
-                       libexec)))
+                       libexec
+                       patchelf
+                       glibc
+                       patchelf
+                       glibc)))
            (chmod (string-append bin "/albion-online-setup") #o755)
 
            ;; Create game launcher script
@@ -93,25 +110,45 @@ if [ ! -d \"$GAME_DIR\" ]; then
   exit 1
 fi
 
+# Check if the executable has been patched
+if [ -f \"$GAME_DIR/launcher/Albion-Online\" ]; then
+  if readelf -l \"$GAME_DIR/launcher/Albion-Online\" | grep -q \"/lib64/ld-linux-x86-64.so.2\"; then
+    echo \"Game executable needs patching, patching now...\"
+    ~a --set-interpreter ~a/lib/ld-linux-x86-64.so.2 \"$GAME_DIR/launcher/Albion-Online\"
+  fi
+fi
+
 # Setup environment
-export LD_LIBRARY_PATH=\"$GAME_DIR:$GAME_DIR/launcher:~a\"
+export LD_LIBRARY_PATH=\"~a:$GAME_DIR:$GAME_DIR/launcher\"
 export QT_QPA_PLATFORM_PLUGIN_PATH=\"$GAME_DIR/launcher/plugins/platforms\"
 export QT_PLUGIN_PATH=\"$GAME_DIR/launcher/plugins/\"
 export LIBGL_ALWAYS_SOFTWARE=1
+
+# Additional environment variables that might be needed
+export FONTCONFIG_PATH=\"~a/etc/fonts\"
+export FONTCONFIG_FILE=\"~a/etc/fonts/fonts.conf\"
 
 # Run the game
 cd \"$GAME_DIR\"
 exec \"$GAME_DIR/launcher/Albion-Online\" \"--no-sandbox\" \"$@\"
 "
                        (assoc-ref %build-inputs "bash")
+                       patchelf
+                       glibc
                        (string-join
                         (map (lambda (lib)
                                (string-append (assoc-ref %build-inputs lib) "/lib"))
                              '("glibc" "gcc:lib" "libx11" "libxext" "libxrender"
                                "libxtst" "libxi" "libxrandr" "libxcursor"
-                               "mesa" "pulseaudio" "gtk+" "freetype" "fontconfig"
-                               "nss" "alsa-lib" "expat"))
-                        ":"))))
+                               "libxcomposite" "libxdamage" "libxfixes"
+                               "libxcb" "libxau" "libxdmcp"
+                               "mesa" "pulseaudio" "gtk+" "glib"
+                               "freetype" "fontconfig" "dbus"
+                               "nss" "nspr" "alsa-lib" "expat" "zlib"
+                               "util-linux"))
+                        ":")
+                       (assoc-ref %build-inputs "fontconfig")
+                       (assoc-ref %build-inputs "fontconfig"))))
            (chmod (string-append bin "/albion-online") #o755)
 
            #t))))
@@ -119,6 +156,7 @@ exec \"$GAME_DIR/launcher/Albion-Online\" \"--no-sandbox\" \"$@\"
      (list patchelf))
     (inputs
      `(("bash" ,bash-minimal)
+       ("patchelf" ,patchelf)
        ("glibc" ,glibc)
        ("gcc:lib" ,gcc "lib")
        ("libx11" ,libx11)
@@ -128,15 +166,26 @@ exec \"$GAME_DIR/launcher/Albion-Online\" \"--no-sandbox\" \"$@\"
        ("libxi" ,libxi)
        ("libxrandr" ,libxrandr)
        ("libxcursor" ,libxcursor)
+       ("libxcomposite" ,libxcomposite)
+       ("libxdamage" ,libxdamage)
+       ("libxfixes" ,libxfixes)
+       ("libxcb" ,libxcb)
+       ("libxau" ,libxau)
+       ("libxdmcp" ,libxdmcp)
        ("mesa" ,mesa)
        ("pulseaudio" ,pulseaudio)
        ("gtk+" ,gtk+)
+       ("glib" ,glib)
+       ("dbus" ,dbus)
        ("pango" ,pango)
        ("freetype" ,freetype)
        ("fontconfig" ,fontconfig)
        ("nss" ,nss)
+       ("nspr" ,nspr)
        ("alsa-lib" ,alsa-lib)
-       ("expat" ,expat)))
+       ("expat" ,expat)
+       ("zlib" ,zlib)
+       ("util-linux" ,util-linux)))  ; for libuuid
     (home-page "https://albiononline.com")
     (synopsis "Sandbox MMORPG set in an open medieval fantasy world")
     (description
