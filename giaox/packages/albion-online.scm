@@ -95,19 +95,65 @@ exec \"~a\" \"$@\"
                        setup-bin)))
            (chmod launcher-script #o755)
 
-           ;; Create game launcher script
+           ;; Create game launcher script with better diagnostics
            (call-with-output-file game-launcher-script
              (lambda (port)
                (format port "#!~a/bin/sh
-# Check if the game is installed
+# Game installation directory
 GAME_DIR=\"$HOME/Sandbox/Games/AlbionOnline\"
+
+# Check if the game is installed
 if [ ! -d \"$GAME_DIR\" ]; then
   echo \"Albion Online is not installed. Please run albion-online-setup first.\"
   exit 1
 fi
 
+# Debug information
+echo \"Checking Albion Online installation...\"
+echo \"Game directory: $GAME_DIR\"
+ls -la \"$GAME_DIR\"
+
+# Try to find the executable
+GAME_EXEC=\"\"
+if [ -f \"$GAME_DIR/launcher/Albion-Online\" ]; then
+  GAME_EXEC=\"$GAME_DIR/launcher/Albion-Online\"
+elif [ -f \"$GAME_DIR/Albion-Online\" ]; then
+  # Check if this is a script that points to the real executable
+  if grep -q \"launcher/Albion-Online\" \"$GAME_DIR/Albion-Online\"; then
+    # This is a script, let's examine it
+    echo \"Found script at $GAME_DIR/Albion-Online, examining...\"
+    cat \"$GAME_DIR/Albion-Online\"
+
+    # Try to find the real path from the script
+    SCRIPT_PATH=$(grep -o \"\\$SCRIPTPATH/[^\\\"]*Albion-Online\" \"$GAME_DIR/Albion-Online\" | head -1 | sed 's/\\$SCRIPTPATH/\\$GAME_DIR/')
+    if [ -n \"$SCRIPT_PATH\" ]; then
+      # Evaluate the path to resolve variables
+      EVAL_PATH=$(eval echo $SCRIPT_PATH)
+      if [ -f \"$EVAL_PATH\" ]; then
+        GAME_EXEC=\"$EVAL_PATH\"
+      fi
+    fi
+  else
+    GAME_EXEC=\"$GAME_DIR/Albion-Online\"
+  fi
+fi
+
+# If we still don't have an executable, search for it
+if [ -z \"$GAME_EXEC\" ] || [ ! -f \"$GAME_EXEC\" ]; then
+  echo \"Searching for Albion Online executable...\"
+  FOUND_EXEC=$(find \"$GAME_DIR\" -type f -executable -name \"Albion-Online\" 2>/dev/null | head -1)
+  if [ -n \"$FOUND_EXEC\" ]; then
+    GAME_EXEC=\"$FOUND_EXEC\"
+  else
+    echo \"Could not find Albion Online executable. Please check your installation.\"
+    exit 1
+  fi
+fi
+
+echo \"Using executable: $GAME_EXEC\"
+
 # Add required libraries from Guix packages
-export LD_LIBRARY_PATH=\"$GAME_DIR/launcher:~a:$LD_LIBRARY_PATH\"
+export LD_LIBRARY_PATH=\"$GAME_DIR:$GAME_DIR/launcher:~a:$LD_LIBRARY_PATH\"
 
 # Set font configuration
 export FONTCONFIG_PATH=\"~a\"
@@ -125,7 +171,8 @@ export QSG_INFO=1
 
 # Run the game
 cd \"$GAME_DIR\"
-exec \"$GAME_DIR/launcher/Albion-Online\" \"--no-sandbox\" \"-loglevel 0\" \"$@\"
+echo \"Starting Albion Online...\"
+exec \"$GAME_EXEC\" \"--no-sandbox\" \"-loglevel 0\" \"$@\"
 "
                        (assoc-ref %build-inputs "bash")
                        (string-join
