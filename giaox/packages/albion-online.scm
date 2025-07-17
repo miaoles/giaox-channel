@@ -6,7 +6,6 @@
   #:use-module (gnu packages base)
   #:use-module (gnu packages bash)
   #:use-module (gnu packages gcc)
-  #:use-module (gnu packages compression)
   #:use-module (gnu packages elf)
   #:use-module (gnu packages gtk)
   #:use-module (gnu packages gl)
@@ -15,10 +14,7 @@
   #:use-module (gnu packages pulseaudio)
   #:use-module (gnu packages fontutils)
   #:use-module (gnu packages nss)
-  #:use-module (gnu packages cups)
-  #:use-module (gnu packages glib)
   #:use-module (gnu packages audio)
-  #:use-module (gnu packages gnome)
   #:use-module (gnu packages xml))
 
 (define-public albion-online
@@ -40,14 +36,7 @@
          (use-modules (guix build utils))
          (let* ((out (assoc-ref %outputs "out"))
                 (bin (string-append out "/bin"))
-                (share (string-append out "/share"))
-                (applications (string-append share "/applications"))
-                (icons (string-append share "/icons/hicolor/128x128/apps"))
-                (doc (string-append share "/doc/albion-online"))
                 (libexec (string-append out "/libexec"))
-                (setup-bin (string-append libexec "/albion-online-setup"))
-                (launcher-script (string-append bin "/albion-online-setup"))
-                (game-launcher-script (string-append bin "/albion-online"))
                 (source (assoc-ref %build-inputs "source"))
                 (patchelf (string-append (assoc-ref %build-inputs "patchelf") "/bin/patchelf"))
                 (glibc (assoc-ref %build-inputs "glibc")))
@@ -55,48 +44,44 @@
            ;; Create directories
            (mkdir-p bin)
            (mkdir-p libexec)
-           (mkdir-p applications)
-           (mkdir-p icons)
-           (mkdir-p doc)
 
-           ;; Copy the binary
-           (copy-file source setup-bin)
-           (chmod setup-bin #o755)
+           ;; Copy the installer binary
+           (copy-file source (string-append libexec "/albion-online-setup"))
+           (chmod (string-append libexec "/albion-online-setup") #o755)
 
-           ;; Patch the interpreter
+           ;; Patch the installer
            (invoke patchelf "--set-interpreter"
                    (string-append glibc "/lib/ld-linux-x86-64.so.2")
-                   setup-bin)
+                   (string-append libexec "/albion-online-setup"))
 
-           ;; Create installer wrapper script
-           (call-with-output-file launcher-script
+           ;; Create installer script
+           (call-with-output-file (string-append bin "/albion-online-setup")
              (lambda (port)
                (format port "#!~a/bin/sh
+# Set default installation directory
+INSTALL_DIR=\"$HOME/Sandbox/Games/AlbionOnline\"
+mkdir -p \"$INSTALL_DIR\"
+
+# Set environment variables
 export LD_LIBRARY_PATH=\"~a\"
-export FONTCONFIG_PATH=\"~a\"
-export FONTCONFIG_FILE=\"~a\"
-exec \"~a\" \"$@\"
+
+# Run the installer
+echo \"Installing Albion Online to $INSTALL_DIR\"
+echo \"If prompted, please select this directory: $INSTALL_DIR\"
+exec \"~a/albion-online-setup\" \"$@\"
 "
                        (assoc-ref %build-inputs "bash")
                        (string-join
                         (map (lambda (lib)
                                (string-append (assoc-ref %build-inputs lib) "/lib"))
                              '("glibc" "gcc:lib" "libx11" "libxext" "libxrender"
-                               "libxtst" "libxi" "libxrandr" "libxcursor"
-                               "libxcomposite" "libxdamage" "libxfixes"
-                               "mesa" "pulseaudio" "gtk+" "gdk-pixbuf"
-                               "cairo" "pango" "freetype" "fontconfig"
-                               "nspr" "nss" "atk" "at-spi2-core" "dbus"
-                               "glib" "cups" "libxscrnsaver"
-                               "libxcb" "libxau" "libxdmcp" "alsa-lib" "expat"))
+                               "mesa" "gtk+" "pango" "freetype" "fontconfig"))
                         ":")
-                       (string-append (assoc-ref %build-inputs "fontconfig") "/etc/fonts")
-                       (string-append (assoc-ref %build-inputs "fontconfig") "/etc/fonts/fonts.conf")
-                       setup-bin)))
-           (chmod launcher-script #o755)
+                       libexec)))
+           (chmod (string-append bin "/albion-online-setup") #o755)
 
-           ;; Create game launcher script with better diagnostics
-           (call-with-output-file game-launcher-script
+           ;; Create game launcher script
+           (call-with-output-file (string-append bin "/albion-online")
              (lambda (port)
                (format port "#!~a/bin/sh
 # Game installation directory
@@ -108,71 +93,15 @@ if [ ! -d \"$GAME_DIR\" ]; then
   exit 1
 fi
 
-# Debug information
-echo \"Checking Albion Online installation...\"
-echo \"Game directory: $GAME_DIR\"
-ls -la \"$GAME_DIR\"
-
-# Try to find the executable
-GAME_EXEC=\"\"
-if [ -f \"$GAME_DIR/launcher/Albion-Online\" ]; then
-  GAME_EXEC=\"$GAME_DIR/launcher/Albion-Online\"
-elif [ -f \"$GAME_DIR/Albion-Online\" ]; then
-  # Check if this is a script that points to the real executable
-  if grep -q \"launcher/Albion-Online\" \"$GAME_DIR/Albion-Online\"; then
-    # This is a script, let's examine it
-    echo \"Found script at $GAME_DIR/Albion-Online, examining...\"
-    cat \"$GAME_DIR/Albion-Online\"
-
-    # Try to find the real path from the script
-    SCRIPT_PATH=$(grep -o \"\\$SCRIPTPATH/[^\\\"]*Albion-Online\" \"$GAME_DIR/Albion-Online\" | head -1 | sed 's/\\$SCRIPTPATH/\\$GAME_DIR/')
-    if [ -n \"$SCRIPT_PATH\" ]; then
-      # Evaluate the path to resolve variables
-      EVAL_PATH=$(eval echo $SCRIPT_PATH)
-      if [ -f \"$EVAL_PATH\" ]; then
-        GAME_EXEC=\"$EVAL_PATH\"
-      fi
-    fi
-  else
-    GAME_EXEC=\"$GAME_DIR/Albion-Online\"
-  fi
-fi
-
-# If we still don't have an executable, search for it
-if [ -z \"$GAME_EXEC\" ] || [ ! -f \"$GAME_EXEC\" ]; then
-  echo \"Searching for Albion Online executable...\"
-  FOUND_EXEC=$(find \"$GAME_DIR\" -type f -executable -name \"Albion-Online\" 2>/dev/null | head -1)
-  if [ -n \"$FOUND_EXEC\" ]; then
-    GAME_EXEC=\"$FOUND_EXEC\"
-  else
-    echo \"Could not find Albion Online executable. Please check your installation.\"
-    exit 1
-  fi
-fi
-
-echo \"Using executable: $GAME_EXEC\"
-
-# Add required libraries from Guix packages
-export LD_LIBRARY_PATH=\"$GAME_DIR:$GAME_DIR/launcher:~a:$LD_LIBRARY_PATH\"
-
-# Set font configuration
-export FONTCONFIG_PATH=\"~a\"
-export FONTCONFIG_FILE=\"~a\"
-
-# Set Qt environment variables
+# Setup environment
+export LD_LIBRARY_PATH=\"$GAME_DIR:$GAME_DIR/launcher:~a\"
 export QT_QPA_PLATFORM_PLUGIN_PATH=\"$GAME_DIR/launcher/plugins/platforms\"
 export QT_PLUGIN_PATH=\"$GAME_DIR/launcher/plugins/\"
-export QT_SCALE_FACTOR=1
-export QT_QPA_PLATFORM=\"xcb\"
-
-# Graphics settings
 export LIBGL_ALWAYS_SOFTWARE=1
-export QSG_INFO=1
 
 # Run the game
 cd \"$GAME_DIR\"
-echo \"Starting Albion Online...\"
-exec \"$GAME_EXEC\" \"--no-sandbox\" \"-loglevel 0\" \"$@\"
+exec \"$GAME_DIR/launcher/Albion-Online\" \"--no-sandbox\" \"$@\"
 "
                        (assoc-ref %build-inputs "bash")
                        (string-join
@@ -180,52 +109,10 @@ exec \"$GAME_EXEC\" \"--no-sandbox\" \"-loglevel 0\" \"$@\"
                                (string-append (assoc-ref %build-inputs lib) "/lib"))
                              '("glibc" "gcc:lib" "libx11" "libxext" "libxrender"
                                "libxtst" "libxi" "libxrandr" "libxcursor"
-                               "libxcomposite" "libxdamage" "libxfixes"
-                               "mesa" "pulseaudio" "gtk+" "gdk-pixbuf"
-                               "cairo" "pango" "freetype" "fontconfig"
-                               "nspr" "nss" "atk" "at-spi2-core" "dbus"
-                               "glib" "cups" "libxscrnsaver"
-                               "libxcb" "libxau" "libxdmcp" "alsa-lib" "expat"))
-                        ":")
-                       (string-append (assoc-ref %build-inputs "fontconfig") "/etc/fonts")
-                       (string-append (assoc-ref %build-inputs "fontconfig") "/etc/fonts/fonts.conf"))))
-           (chmod game-launcher-script #o755)
-
-           ;; Create desktop file
-           (call-with-output-file (string-append applications "/albion-online.desktop")
-             (lambda (port)
-               (format port "[Desktop Entry]
-Name=Albion Online
-Comment=Sandbox MMORPG set in an open medieval fantasy world
-Exec=albion-online
-Terminal=false
-Type=Application
-Categories=Game;RolePlaying;
-Keywords=game;mmorpg;rpg;
-Icon=albion-online
-")))
-
-           ;; Create a placeholder icon (will be replaced by the installer)
-           (call-with-output-file (string-append icons "/albion-online.png")
-             (lambda (port)
-               (display "This is a placeholder. The actual icon will be installed by the game installer." port)))
-
-           ;; Create README file
-           (call-with-output-file (string-append doc "/README")
-             (lambda (port)
-               (display "Albion Online for Guix
-
-Installation:
-1. Run 'albion-online-setup' to install the game
-2. Choose ~/Sandbox/Games/AlbionOnline as the installation directory
-3. Complete the installation process
-
-Playing:
-1. Run 'albion-online' to start the game
-
-Troubleshooting:
-If you encounter issues, try running the game from a terminal to see error messages.
-" port)))
+                               "mesa" "pulseaudio" "gtk+" "freetype" "fontconfig"
+                               "nss" "alsa-lib" "expat"))
+                        ":"))))
+           (chmod (string-append bin "/albion-online") #o755)
 
            #t))))
     (native-inputs
@@ -241,31 +128,15 @@ If you encounter issues, try running the game from a terminal to see error messa
        ("libxi" ,libxi)
        ("libxrandr" ,libxrandr)
        ("libxcursor" ,libxcursor)
-       ("libxcomposite" ,libxcomposite)
-       ("libxdamage" ,libxdamage)
-       ("libxfixes" ,libxfixes)
-       ("libxscrnsaver" ,libxscrnsaver)
-       ("libxcb" ,libxcb)
-       ("libxau" ,libxau)
-       ("libxdmcp" ,libxdmcp)
        ("mesa" ,mesa)
        ("pulseaudio" ,pulseaudio)
        ("gtk+" ,gtk+)
-       ("gdk-pixbuf" ,gdk-pixbuf)
-       ("cairo" ,cairo)
        ("pango" ,pango)
        ("freetype" ,freetype)
        ("fontconfig" ,fontconfig)
-       ("nspr" ,nspr)
        ("nss" ,nss)
-       ("atk" ,atk)
-       ("at-spi2-core" ,at-spi2-core)
-       ("dbus" ,dbus)
-       ("glib" ,glib)
-       ("cups" ,cups)
        ("alsa-lib" ,alsa-lib)
-       ("expat" ,expat)
-       ("zlib" ,zlib)))
+       ("expat" ,expat)))
     (home-page "https://albiononline.com")
     (synopsis "Sandbox MMORPG set in an open medieval fantasy world")
     (description
@@ -274,5 +145,4 @@ It features a player-driven economy, classless combat system, and intense PvP ba
 This package provides both the game installer and a launcher for the installed game.")
     (license (license:non-copyleft "https://albiononline.com/en/terms_and_conditions"))))
 
-;; This allows building with "guix build -f"
 albion-online
