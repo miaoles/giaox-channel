@@ -17,7 +17,8 @@
   #:use-module (gnu packages xml)
   #:use-module (gnu packages glib)
   #:use-module (gnu packages linux)
-  #:use-module (gnu packages compression))
+  #:use-module (gnu packages compression)
+  #:use-module (gnu packages kerberos))
 
 (define-public albion-online
   (package
@@ -111,7 +112,7 @@ fi
                                "mesa" "pulseaudio" "gtk+" "glib"
                                "freetype" "fontconfig" "dbus"
                                "nss" "nspr" "alsa-lib" "expat" "zlib"
-                               "util-linux"))
+                               "util-linux" "mit-krb5"))
                         ":")
                        glibc)))
            (chmod (string-append bin "/albion-online-setup") #o755)
@@ -154,7 +155,7 @@ exec \"$GAME_DIR/launcher/Albion-Online\" \"--no-sandbox\" \"$@\"
                                "mesa" "pulseaudio" "gtk+" "glib"
                                "freetype" "fontconfig" "dbus"
                                "nss" "nspr" "alsa-lib" "expat" "zlib"
-                               "util-linux"))
+                               "util-linux" "mit-krb5"))
                         ":")
                        (assoc-ref %build-inputs "fontconfig")
                        (assoc-ref %build-inputs "fontconfig"))))
@@ -193,7 +194,8 @@ exec \"$GAME_DIR/launcher/Albion-Online\" \"--no-sandbox\" \"$@\"
        ("alsa-lib" ,alsa-lib)
        ("expat" ,expat)
        ("zlib" ,zlib)
-       ("util-linux" ,util-linux)))
+       ("util-linux" ,util-linux)
+       ("mit-krb5" ,mit-krb5)))
     (home-page "https://albiononline.com")
     (synopsis "Sandbox MMORPG set in an open medieval fantasy world")
     (description
