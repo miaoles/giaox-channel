@@ -102,18 +102,23 @@ fi
                                "mesa" "gtk+" "pango" "freetype" "fontconfig"))
                         ":")
                        libexec
-                       (string-join
-                        (map (lambda (lib)
-                               (string-append (assoc-ref %build-inputs lib) "/lib"))
-                             '("glibc" "gcc:lib" "libx11" "libxext" "libxrender"
-                               "libxtst" "libxi" "libxrandr" "libxcursor"
-                               "libxcomposite" "libxdamage" "libxfixes"
-                               "libxcb" "libxau" "libxdmcp"
-                               "mesa" "pulseaudio" "gtk+" "glib"
-                               "freetype" "fontconfig" "dbus"
-                               "nss" "nspr" "alsa-lib" "expat" "zlib"
-                               "util-linux" "mit-krb5"))
-                        ":")
+                       (string-append
+                        (string-join
+                         (map (lambda (lib)
+                                (string-append (assoc-ref %build-inputs lib) "/lib"))
+                              '("glibc" "gcc:lib" "libx11" "libxext" "libxrender"
+                                "libxtst" "libxi" "libxrandr" "libxcursor"
+                                "libxcomposite" "libxdamage" "libxfixes"
+                                "libxcb" "libxau" "libxdmcp"
+                                "mesa" "pulseaudio" "gtk+" "glib"
+                                "freetype" "fontconfig" "dbus"
+                                "alsa-lib" "expat" "zlib"
+                                "util-linux" "mit-krb5"))
+                         ":")
+                        ":"
+                        (string-append (assoc-ref %build-inputs "nss") "/lib/nss")
+                        ":"
+                        (string-append (assoc-ref %build-inputs "nspr") "/lib/nspr"))
                        glibc)))
            (chmod (string-append bin "/albion-online-setup") #o755)
 
@@ -140,23 +145,32 @@ export LIBGL_ALWAYS_SOFTWARE=1
 export FONTCONFIG_PATH=\"~a/etc/fonts\"
 export FONTCONFIG_FILE=\"~a/etc/fonts/fonts.conf\"
 
+# For debugging: print all the missing libraries
+echo \"Checking for missing libraries...\"
+ldd \"$GAME_DIR/launcher/Albion-Online.original\" | grep \"not found\" || true
+
 # Run the game through the wrapper
 cd \"$GAME_DIR\"
 exec \"$GAME_DIR/launcher/Albion-Online\" \"--no-sandbox\" \"$@\"
 "
                        (assoc-ref %build-inputs "bash")
-                       (string-join
-                        (map (lambda (lib)
-                               (string-append (assoc-ref %build-inputs lib) "/lib"))
-                             '("glibc" "gcc:lib" "libx11" "libxext" "libxrender"
-                               "libxtst" "libxi" "libxrandr" "libxcursor"
-                               "libxcomposite" "libxdamage" "libxfixes"
-                               "libxcb" "libxau" "libxdmcp"
-                               "mesa" "pulseaudio" "gtk+" "glib"
-                               "freetype" "fontconfig" "dbus"
-                               "nss" "nspr" "alsa-lib" "expat" "zlib"
-                               "util-linux" "mit-krb5"))
-                        ":")
+                       (string-append
+                        (string-join
+                         (map (lambda (lib)
+                                (string-append (assoc-ref %build-inputs lib) "/lib"))
+                              '("glibc" "gcc:lib" "libx11" "libxext" "libxrender"
+                                "libxtst" "libxi" "libxrandr" "libxcursor"
+                                "libxcomposite" "libxdamage" "libxfixes"
+                                "libxcb" "libxau" "libxdmcp"
+                                "mesa" "pulseaudio" "gtk+" "glib"
+                                "freetype" "fontconfig" "dbus"
+                                "alsa-lib" "expat" "zlib"
+                                "util-linux" "mit-krb5"))
+                         ":")
+                        ":"
+                        (string-append (assoc-ref %build-inputs "nss") "/lib/nss")
+                        ":"
+                        (string-append (assoc-ref %build-inputs "nspr") "/lib/nspr"))
                        (assoc-ref %build-inputs "fontconfig")
                        (assoc-ref %build-inputs "fontconfig"))))
            (chmod (string-append bin "/albion-online") #o755)
