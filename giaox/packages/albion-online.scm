@@ -71,6 +71,27 @@ export LD_LIBRARY_PATH=\"~a\"
 echo \"Installing Albion Online to $INSTALL_DIR\"
 echo \"If prompted, please select this directory: $INSTALL_DIR\"
 \"~a/albion-online-setup\" \"$@\"
+
+# After installation, create wrapper for the game executable
+if [ -f \"$INSTALL_DIR/launcher/Albion-Online\" ]; then
+  echo \"Creating launcher wrapper...\"
+  # Backup original if not already done
+  if [ ! -f \"$INSTALL_DIR/launcher/Albion-Online.original\" ]; then
+    mv \"$INSTALL_DIR/launcher/Albion-Online\" \"$INSTALL_DIR/launcher/Albion-Online.original\"
+  fi
+
+  # Create wrapper script
+  cat > \"$INSTALL_DIR/launcher/Albion-Online\" << 'WRAPPER_EOF'
+#!/bin/sh
+# Wrapper script for Albion Online
+SCRIPT_DIR=\"$(cd \"$(dirname \"$0\")\" && pwd)\"
+export LD_LIBRARY_PATH=\"~a:$SCRIPT_DIR\"
+exec ~a/lib/ld-linux-x86-64.so.2 \"$SCRIPT_DIR/Albion-Online.original\" \"$@\"
+WRAPPER_EOF
+
+  chmod +x \"$INSTALL_DIR/launcher/Albion-Online\"
+  echo \"Wrapper created successfully.\"
+fi
 "
                        (assoc-ref %build-inputs "bash")
                        (string-join
@@ -79,10 +100,23 @@ echo \"If prompted, please select this directory: $INSTALL_DIR\"
                              '("glibc" "gcc:lib" "libx11" "libxext" "libxrender"
                                "mesa" "gtk+" "pango" "freetype" "fontconfig"))
                         ":")
-                       libexec)))
+                       libexec
+                       (string-join
+                        (map (lambda (lib)
+                               (string-append (assoc-ref %build-inputs lib) "/lib"))
+                             '("glibc" "gcc:lib" "libx11" "libxext" "libxrender"
+                               "libxtst" "libxi" "libxrandr" "libxcursor"
+                               "libxcomposite" "libxdamage" "libxfixes"
+                               "libxcb" "libxau" "libxdmcp"
+                               "mesa" "pulseaudio" "gtk+" "glib"
+                               "freetype" "fontconfig" "dbus"
+                               "nss" "nspr" "alsa-lib" "expat" "zlib"
+                               "util-linux"))
+                        ":")
+                       glibc)))
            (chmod (string-append bin "/albion-online-setup") #o755)
 
-           ;; Create game launcher script using FHS container
+           ;; Create game launcher script
            (call-with-output-file (string-append bin "/albion-online")
              (lambda (port)
                (format port "#!~a/bin/sh
@@ -95,27 +129,21 @@ if [ ! -d \"$GAME_DIR\" ]; then
   exit 1
 fi
 
-# Create FHS symlink structure for the dynamic linker
-if [ ! -d \"$GAME_DIR/fhs-root\" ]; then
-  echo \"Setting up FHS directory structure...\"
-  mkdir -p \"$GAME_DIR/fhs-root/lib64\"
-  ln -sf \"~a/lib/ld-linux-x86-64.so.2\" \"$GAME_DIR/fhs-root/lib64/ld-linux-x86-64.so.2\"
-fi
-
 # Setup environment
 export LD_LIBRARY_PATH=\"~a:$GAME_DIR:$GAME_DIR/launcher\"
 export QT_QPA_PLATFORM_PLUGIN_PATH=\"$GAME_DIR/launcher/plugins/platforms\"
 export QT_PLUGIN_PATH=\"$GAME_DIR/launcher/plugins/\"
 export LIBGL_ALWAYS_SOFTWARE=1
+
+# Additional environment variables
 export FONTCONFIG_PATH=\"~a/etc/fonts\"
 export FONTCONFIG_FILE=\"~a/etc/fonts/fonts.conf\"
 
-# Run the game with LD_LIBRARY_PATH pointing to our FHS structure
+# Run the game through the wrapper
 cd \"$GAME_DIR\"
-LD_LIBRARY_PATH=\"$GAME_DIR/fhs-root:$LD_LIBRARY_PATH\" exec \"$GAME_DIR/Albion-Online\" \"--no-sandbox\" \"$@\"
+exec \"$GAME_DIR/launcher/Albion-Online\" \"--no-sandbox\" \"$@\"
 "
                        (assoc-ref %build-inputs "bash")
-                       glibc
                        (string-join
                         (map (lambda (lib)
                                (string-append (assoc-ref %build-inputs lib) "/lib"))
@@ -137,7 +165,6 @@ LD_LIBRARY_PATH=\"$GAME_DIR/fhs-root:$LD_LIBRARY_PATH\" exec \"$GAME_DIR/Albion-
      (list patchelf))
     (inputs
      `(("bash" ,bash-minimal)
-       ("patchelf" ,patchelf)
        ("glibc" ,glibc)
        ("gcc:lib" ,gcc "lib")
        ("libx11" ,libx11)
@@ -166,7 +193,7 @@ LD_LIBRARY_PATH=\"$GAME_DIR/fhs-root:$LD_LIBRARY_PATH\" exec \"$GAME_DIR/Albion-
        ("alsa-lib" ,alsa-lib)
        ("expat" ,expat)
        ("zlib" ,zlib)
-       ("util-linux" ,util-linux)))  ; for libuuid
+       ("util-linux" ,util-linux)))
     (home-page "https://albiononline.com")
     (synopsis "Sandbox MMORPG set in an open medieval fantasy world")
     (description
