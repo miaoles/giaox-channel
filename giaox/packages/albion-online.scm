@@ -137,22 +137,37 @@ if [ ! -d \"$GAME_DIR\" ]; then
   exit 1
 fi
 
-# Create symlinks for NSPR and NSS libraries if they don't exist
+# Copy NSPR and NSS libraries directly to the game directory
 NSPR_LIBS=(\"libnspr4.so\" \"libplc4.so\" \"libplds4.so\")
 for lib in \"${NSPR_LIBS[@]}\"; do
   if [ ! -f \"$GAME_DIR/launcher/$lib\" ]; then
-    echo \"Creating symlink for $lib\"
-    ln -sf \"~a/lib/nspr/$lib\" \"$GAME_DIR/launcher/$lib\"
+    echo \"Copying $lib to game directory\"
+    cp -f \"~a/lib/nspr/$lib\" \"$GAME_DIR/launcher/$lib\"
   fi
 done
 
 NSS_LIBS=(\"libsmime3.so\" \"libnss3.so\" \"libnssutil3.so\")
 for lib in \"${NSS_LIBS[@]}\"; do
   if [ ! -f \"$GAME_DIR/launcher/$lib\" ]; then
-    echo \"Creating symlink for $lib\"
-    ln -sf \"~a/lib/nss/$lib\" \"$GAME_DIR/launcher/$lib\"
+    echo \"Copying $lib to game directory\"
+    cp -f \"~a/lib/nss/$lib\" \"$GAME_DIR/launcher/$lib\"
   fi
 done
+
+# Copy GCC libraries
+GCC_LIBS=(\"libstdc++.so.6\" \"libgcc_s.so.1\")
+for lib in \"${GCC_LIBS[@]}\"; do
+  if [ ! -f \"$GAME_DIR/launcher/$lib\" ]; then
+    echo \"Copying $lib to game directory\"
+    cp -f \"~a/lib/$lib\" \"$GAME_DIR/launcher/$lib\"
+  fi
+done
+
+# Copy OpenGL library
+if [ ! -f \"$GAME_DIR/launcher/libGL.so.1\" ]; then
+  echo \"Copying libGL.so.1 to game directory\"
+  cp -f \"~a/lib/libGL.so.1\" \"$GAME_DIR/launcher/libGL.so.1\"
+fi
 
 # Setup environment
 export LD_LIBRARY_PATH=\"~a:$GAME_DIR:$GAME_DIR/launcher\"
@@ -175,6 +190,8 @@ exec \"$GAME_DIR/launcher/Albion-Online\" \"--no-sandbox\" \"$@\"
                        (assoc-ref %build-inputs "bash")
                        nspr
                        nss
+                       (assoc-ref %build-inputs "gcc:lib")
+                       (assoc-ref %build-inputs "mesa")
                        (string-append
                         (string-join
                          (map (lambda (lib)
