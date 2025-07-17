@@ -71,17 +71,6 @@ export LD_LIBRARY_PATH=\"~a\"
 echo \"Installing Albion Online to $INSTALL_DIR\"
 echo \"If prompted, please select this directory: $INSTALL_DIR\"
 \"~a/albion-online-setup\" \"$@\"
-
-# After installation, patch the game executable
-if [ -f \"$INSTALL_DIR/launcher/Albion-Online\" ]; then
-  echo \"Patching game executable...\"
-  ~a --set-interpreter ~a/lib/ld-linux-x86-64.so.2 \"$INSTALL_DIR/launcher/Albion-Online\" || true
-  # Also patch QtWebEngineProcess if it exists
-  if [ -f \"$INSTALL_DIR/launcher/QtWebEngineProcess\" ]; then
-    ~a --set-interpreter ~a/lib/ld-linux-x86-64.so.2 \"$INSTALL_DIR/launcher/QtWebEngineProcess\" || true
-  fi
-  echo \"Patching complete.\"
-fi
 "
                        (assoc-ref %build-inputs "bash")
                        (string-join
@@ -90,14 +79,10 @@ fi
                              '("glibc" "gcc:lib" "libx11" "libxext" "libxrender"
                                "mesa" "gtk+" "pango" "freetype" "fontconfig"))
                         ":")
-                       libexec
-                       patchelf
-                       glibc
-                       patchelf
-                       glibc)))
+                       libexec)))
            (chmod (string-append bin "/albion-online-setup") #o755)
 
-           ;; Create game launcher script
+           ;; Create game launcher script using FHS container
            (call-with-output-file (string-append bin "/albion-online")
              (lambda (port)
                (format port "#!~a/bin/sh
@@ -110,12 +95,11 @@ if [ ! -d \"$GAME_DIR\" ]; then
   exit 1
 fi
 
-# Check if the executable has been patched
-if [ -f \"$GAME_DIR/launcher/Albion-Online\" ]; then
-  if readelf -l \"$GAME_DIR/launcher/Albion-Online\" | grep -q \"/lib64/ld-linux-x86-64.so.2\"; then
-    echo \"Game executable needs patching, patching now...\"
-    ~a --set-interpreter ~a/lib/ld-linux-x86-64.so.2 \"$GAME_DIR/launcher/Albion-Online\"
-  fi
+# Create FHS symlink structure for the dynamic linker
+if [ ! -d \"$GAME_DIR/fhs-root\" ]; then
+  echo \"Setting up FHS directory structure...\"
+  mkdir -p \"$GAME_DIR/fhs-root/lib64\"
+  ln -sf \"~a/lib/ld-linux-x86-64.so.2\" \"$GAME_DIR/fhs-root/lib64/ld-linux-x86-64.so.2\"
 fi
 
 # Setup environment
@@ -123,17 +107,14 @@ export LD_LIBRARY_PATH=\"~a:$GAME_DIR:$GAME_DIR/launcher\"
 export QT_QPA_PLATFORM_PLUGIN_PATH=\"$GAME_DIR/launcher/plugins/platforms\"
 export QT_PLUGIN_PATH=\"$GAME_DIR/launcher/plugins/\"
 export LIBGL_ALWAYS_SOFTWARE=1
-
-# Additional environment variables that might be needed
 export FONTCONFIG_PATH=\"~a/etc/fonts\"
 export FONTCONFIG_FILE=\"~a/etc/fonts/fonts.conf\"
 
-# Run the game
+# Run the game with LD_LIBRARY_PATH pointing to our FHS structure
 cd \"$GAME_DIR\"
-exec \"$GAME_DIR/launcher/Albion-Online\" \"--no-sandbox\" \"$@\"
+LD_LIBRARY_PATH=\"$GAME_DIR/fhs-root:$LD_LIBRARY_PATH\" exec \"$GAME_DIR/Albion-Online\" \"--no-sandbox\" \"$@\"
 "
                        (assoc-ref %build-inputs "bash")
-                       patchelf
                        glibc
                        (string-join
                         (map (lambda (lib)
