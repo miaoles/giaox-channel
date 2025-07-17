@@ -42,7 +42,9 @@
                 (libexec (string-append out "/libexec"))
                 (source (assoc-ref %build-inputs "source"))
                 (patchelf (string-append (assoc-ref %build-inputs "patchelf") "/bin/patchelf"))
-                (glibc (assoc-ref %build-inputs "glibc")))
+                (glibc (assoc-ref %build-inputs "glibc"))
+                (nss (assoc-ref %build-inputs "nss"))
+                (nspr (assoc-ref %build-inputs "nspr")))
 
            ;; Create directories
            (mkdir-p bin)
@@ -116,9 +118,9 @@ fi
                                 "util-linux" "mit-krb5"))
                          ":")
                         ":"
-                        (string-append (assoc-ref %build-inputs "nss") "/lib/nss")
+                        nss "/lib/nss"
                         ":"
-                        (string-append (assoc-ref %build-inputs "nspr") "/lib/nspr"))
+                        nspr "/lib/nspr")
                        glibc)))
            (chmod (string-append bin "/albion-online-setup") #o755)
 
@@ -134,6 +136,23 @@ if [ ! -d \"$GAME_DIR\" ]; then
   echo \"Albion Online is not installed. Please run albion-online-setup first.\"
   exit 1
 fi
+
+# Create symlinks for NSPR and NSS libraries if they don't exist
+NSPR_LIBS=(\"libnspr4.so\" \"libplc4.so\" \"libplds4.so\")
+for lib in \"${NSPR_LIBS[@]}\"; do
+  if [ ! -f \"$GAME_DIR/launcher/$lib\" ]; then
+    echo \"Creating symlink for $lib\"
+    ln -sf \"~a/lib/nspr/$lib\" \"$GAME_DIR/launcher/$lib\"
+  fi
+done
+
+NSS_LIBS=(\"libsmime3.so\" \"libnss3.so\" \"libnssutil3.so\")
+for lib in \"${NSS_LIBS[@]}\"; do
+  if [ ! -f \"$GAME_DIR/launcher/$lib\" ]; then
+    echo \"Creating symlink for $lib\"
+    ln -sf \"~a/lib/nss/$lib\" \"$GAME_DIR/launcher/$lib\"
+  fi
+done
 
 # Setup environment
 export LD_LIBRARY_PATH=\"~a:$GAME_DIR:$GAME_DIR/launcher\"
@@ -154,6 +173,8 @@ cd \"$GAME_DIR\"
 exec \"$GAME_DIR/launcher/Albion-Online\" \"--no-sandbox\" \"$@\"
 "
                        (assoc-ref %build-inputs "bash")
+                       nspr
+                       nss
                        (string-append
                         (string-join
                          (map (lambda (lib)
@@ -168,9 +189,9 @@ exec \"$GAME_DIR/launcher/Albion-Online\" \"--no-sandbox\" \"$@\"
                                 "util-linux" "mit-krb5"))
                          ":")
                         ":"
-                        (string-append (assoc-ref %build-inputs "nss") "/lib/nss")
+                        nss "/lib/nss"
                         ":"
-                        (string-append (assoc-ref %build-inputs "nspr") "/lib/nspr"))
+                        nspr "/lib/nspr")
                        (assoc-ref %build-inputs "fontconfig")
                        (assoc-ref %build-inputs "fontconfig"))))
            (chmod (string-append bin "/albion-online") #o755)
