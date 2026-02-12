@@ -41,7 +41,17 @@
              (lambda _
                (substitute* "lsfg-vk-layer/CMakeLists.txt"
                  (("CXX_VISIBILITY_PRESET hidden")
-                  "CXX_VISIBILITY_PRESET default")))))))
+                  "CXX_VISIBILITY_PRESET default"))))
+           (add-after 'install 'wrap-qt-paths
+             (lambda* (#:key inputs outputs #:allow-other-keys)
+               (let ((out (assoc-ref outputs "out"))
+                     (qtdeclarative (assoc-ref inputs "qtdeclarative"))
+                     (qtbase (assoc-ref inputs "qtbase")))
+                 (wrap-program (string-append out "/bin/lsfg-vk-ui")
+                   `("QML_IMPORT_PATH" ":" prefix
+                     ,(list (string-append qtdeclarative "/lib/qt6/qml")))
+                   `("QT_PLUGIN_PATH" ":" prefix
+                     ,(list (string-append qtbase "/lib/qt6/plugins"))))))))))
       (native-inputs
        (list vulkan-headers
              qttools))
