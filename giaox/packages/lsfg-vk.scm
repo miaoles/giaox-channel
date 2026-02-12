@@ -34,7 +34,14 @@
                "-DLSFGVK_INSTALL_XDG_FILES=ON"
                (string-append "-DLSFGVK_LAYER_LIBRARY_PATH="
                               (assoc-ref %outputs "out")
-                              "/lib/liblsfg-vk-layer.so"))))
+                              "/lib/liblsfg-vk-layer.so"))
+         #:phases
+         (modify-phases %standard-phases
+           (add-after 'unpack 'fix-symbol-linkage
+             (lambda _
+               (substitute* "lsfg-vk-layer/src/entrypoint.cpp"
+                 (("VkResult vkNegotiateLoaderLayerInterfaceVersion")
+                  "extern \"C\" VkResult vkNegotiateLoaderLayerInterfaceVersion")))))))
       (native-inputs
        (list vulkan-headers
              qttools))
