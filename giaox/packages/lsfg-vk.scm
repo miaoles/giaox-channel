@@ -37,11 +37,11 @@
                               "/lib/liblsfg-vk-layer.so"))
          #:phases
          (modify-phases %standard-phases
-           (add-after 'unpack 'fix-symbol-linkage
+           (add-after 'unpack 'fix-symbol-visibility
              (lambda _
-               (substitute* "lsfg-vk-layer/src/entrypoint.cpp"
-                 (("VkResult vkNegotiateLoaderLayerInterfaceVersion")
-                  "extern \"C\" VkResult vkNegotiateLoaderLayerInterfaceVersion")))))))
+               (substitute* "lsfg-vk-layer/CMakeLists.txt"
+                 (("CXX_VISIBILITY_PRESET hidden")
+                  "CXX_VISIBILITY_PRESET default")))))))
       (native-inputs
        (list vulkan-headers
              qttools))
