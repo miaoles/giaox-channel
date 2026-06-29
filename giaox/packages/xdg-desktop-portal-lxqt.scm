@@ -14,7 +14,7 @@
 (define-public xdg-desktop-portal-lxqt
   (package
     (name "xdg-desktop-portal-lxqt")
-    (version "1.1.0")
+    (version "1.4.0")
     (source
      (origin
        (method git-fetch)
@@ -23,7 +23,7 @@
              (commit version)))
        (file-name (git-file-name name version))
        (sha256
-        (base32 "0pbbych38f5g9451injx0iha6gxia3plk3gf00zlfi78a9x3m0mq"))))
+        (base32 "09fphfn1z0q92nqfcx11kx5nvm3vc1i1s1fxlm2lrmssfh34xnhs"))))
     (build-system cmake-build-system)
     (arguments
      '(#:tests? #f))
