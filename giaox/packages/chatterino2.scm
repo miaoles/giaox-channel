@@ -77,7 +77,7 @@
 (define-public chatterino2
   (package
     (name "chatterino2")
-    (version "2.5.3")
+    (version "2.5.5")
     (source
      (origin
        (method git-fetch)
@@ -87,7 +87,7 @@
              (recursive? #t)))
        (file-name (git-file-name name version))
        (sha256
-        (base32 "1fs13vdxbq2dbxr21wp9mvn33bhvnmg17rqdd6yawsgslab2lssv"))))
+        (base32 "0qyhqb5fb10lzy5w7qii981kl2rwxbq6slffbgqdlpdw7knzpr9k"))))
     (build-system cmake-build-system)
     (arguments
      (list
