@@ -13,14 +13,13 @@ OVERVIEW
     activation via active_in, conf.toml created by the layer and owned by
     lsfg-vk-ui.  Every deviation that makes it more declarative, more
     inert, or more reproducible is something the maintainer opts into.
-    Work proceeds per documents/conventions.txt: one step at a time,
-    full-file delivery, a single verification bucket per step, maintainer
-    verification before the next step begins.  Phases 1 and 2 are
-    validated on the desktop; the laptop is validated when Phase 5 lands.
+    Work proceeds per documents/conventions.txt in the giaox repository:
+    one step at a time, full-file delivery, a single verification bucket
+    per step, maintainer verification before the next step begins.
     Phases 4, 5 and 6 are independent of one another and may be reordered
     or dropped at the maintainer's discretion.
 OWNERSHIP (reference)
-    PACKAGE   (giaox/packages/lsfg-vk.scm)
+    PACKAGE   giaox-channel: giaox/packages/lsfg-vk.scm
         Builds the layer, the CLI and the UI.  Guarantees the layer
         manifest is discoverable and that its library_path resolves.
         Publishes the constants other layers need (layer name, the
@@ -28,36 +27,148 @@ OWNERSHIP (reference)
         rediscovers them by globbing the output.  Also publishes the
         container transformer, because making a Vulkan layer reachable
         inside an FHS container is a property of the layer, not of Steam.
-        Contains NO site policy, NO paths belonging to this repository,
-        and NO machine-specific values.
-    SERVICE   (giaox/services/lsfg-vk.scm)
+        Contains NO site policy, NO paths belonging to the configuration
+        repository, and NO machine-specific values.
+    SERVICE   giaox-channel: giaox/services/lsfg-vk.scm
         Installs the package into the home profile, selects the
         activation policy, and optionally materializes conf.toml.  Holds
         defaults that are defensible for any user, not for this machine.
-    MACHINES  (giaox/machines/*/main.scm)
+    MACHINES  giaox: machines/*/main.scm
         The GPU identity, the Steam variant, and the graphics driver.
-    HOME      (giaox/home/main.scm)
+    HOME      giaox: home/main.scm
         One service instantiation carrying the maintainer's profiles and
         the path to Lossless.dll.  Nothing else.
 KEY INVARIANTS (reference)
-    I1  The layer manifest's library_path is an absolute store path.
-        /gnu/store is bind-mounted read-only into nonguix containers, so
-        one manifest is correct both on the host and inside the sandbox.
-        Nothing may ever rewrite this path; doing so is what required the
-        superseded staging machinery.
+    I1  The layer manifest's library_path is an absolute store path, and
+        that path resolves inside a nonguix container EXACTLY WHEN the
+        package is a member of that container.  The launcher runs
+        `guix shell --container -m <manifest>`, which mounts the closure of
+        the container manifest — not the whole store.  Membership and
+        path validity are therefore one fact, not two.  Nothing may ever
+        rewrite this path; rewriting it is what the superseded staging
+        machinery did, and the staging existed only because the package
+        was not a container member.
     I2  The FHS union is mounted at /usr inside the container, so the
-        Vulkan loader's default search path reaches the layer manifest
-        without any environment variable.  Container membership replaces
-        file staging entirely.
+        Vulkan loader's default search path reaches the union's
+        share/vulkan/implicit_layer.d without any environment variable.
+        Container membership replaces file staging entirely.  Confirmed by
+        observation: nvidia_layers, MangoHud and VkLayer_MESA_device_select
+        are already present there and already point into store paths
+        reached through the union's references.
     I3  Environment variables are the ONLY thing that must cross the
         sandbox boundary explicitly, via the container's preserved-env.
-        Every variable lsfg-vk reads is matched by "^LSFGVK_" or
-        "^DISABLE_LSFGVK$"; any variable this repository introduces must
-        fall under the same prefix so the regexp set never grows.
+        The complete set lsfg-vk 2.0 reads is DISABLE_LSFGVK plus ten
+        LSFGVK_* variables; "^DISABLE_LSFGVK$" and "^LSFGVK_" therefore
+        cover it exactly.  Any variable this project introduces must fall
+        under the LSFGVK_ prefix so the regexp set never grows.
     I4  conf.toml is mutable state written by lsfg-vk-ui and by the layer
         itself.  The default configuration must never make it read-only.
     I5  lsfg-vk is x86_64-only.  This must be declared, both for honesty
         and to keep the package out of any 32-bit FHS union.
+    I6  The channel is consumed by `guix pull`, so `guix build lsfg-vk`
+        exercises the PULLED revision, not the working tree.  Every
+        verification of an unpushed change must go through
+        `guix build -L <channel>` / `guix shell -L <channel>` /
+        `guix repl -L <channel>`.  A bucket that omits -L proves nothing
+        about the file under review.
+    I7  The LAYER must resolve the Vulkan loader by bare soname; only the
+        EXECUTABLES may be pointed at a specific one.  lsfg-vk-common
+        dlopens "libvulkan.so.1" and is a STATIC library linked into all
+        three targets, so any patch to that source reaches the layer.  For
+        the layer the bare soname is correct and required: it matches the
+        loader already present in the application's process, which inside
+        the Steam container is the FHS union's, and two loader instances in
+        one process is not a working setup.  For the executables no loader
+        is present and the soname resolves against nothing, because
+        ld-wrapper adds RUNPATH only for linked libraries and a dlopened
+        library is never linked.  The fix is therefore scoped to
+        executables through the linker, never through the source.
+EXTERNAL BLOCKERS (reference)
+    B1  At guix revisions after the generation that built this work, the
+        `nix' package fails its check phase on
+        eval-okay-fromTOML-timestamps (a timestamp separator mismatch in
+        upstream's expected output).  Because nix is in the system
+        closure, this blocks `guix system reconfigure' AND
+        `guix system build', and therefore gates the tests of Steps 2.2
+        and 2.3.  Resolution options, in order of preference: take a
+        substitute if one has appeared; otherwise carry a tests-disabled
+        nix variant in this channel and select it through
+        nix-configuration; pinning the guix channel is a last resort
+        because channels/channels.scm policy requires pinning as a set.
+DISCOVERY RESULTS (locked; Steps 1.1 and 2.1 complete)
+    Upstream surface
+        * Layer identifier: VK_LAYER_LSFGVK_frame_generation.
+        * Upstream's manifest already carries
+          disable_environment = { DISABLE_LSFGVK: "1" }.  2.0 has no
+          enable variable; inertness is a property of profile matching.
+        * Variables, enumerated from the built binaries: DISABLE_LSFGVK,
+          LSFGVK_CONFIG, LSFGVK_DLL_PATH, LSFGVK_ENV, LSFGVK_FLOW_SCALE,
+          LSFGVK_GPU, LSFGVK_MULTIPLIER, LSFGVK_NO_FP16, LSFGVK_PACING,
+          LSFGVK_PERFORMANCE_MODE, LSFGVK_PROFILE.  No LSFG_* strays.
+        * CMake defaults: VK_LAYER on, CLI on, UI off, XDG files off,
+          DEVELOP off.  LSFGVK_LAYER_LIBRARY_PATH is a CACHE variable and
+          is therefore settable; CMAKE_SKIP_RPATH is forced ON by a plain
+          set() and is therefore NOT settable from the command line.
+        * vkNegotiateLoaderLayerInterfaceVersion is annotated
+          visibility("default") in entrypoint.cpp, which overrides the
+          target's hidden visibility preset.  No patch is required to
+          export it; verified by nm with the patch removed.
+        * lsfg-vk-common is a STATIC library (installed as an ARCHIVE) and
+          is linked into the layer, the CLI and the UI.  Its
+          src/vulkan/vulkan.cpp dlopens "libvulkan.so.1" with a
+          "libvulkan.so" fallback.  See I7.
+        * Licence: SPDX-License-Identifier GPL-3.0-or-later throughout, so
+          gpl3+ is correct.
+        * No Khronos headers are vendored; sources include
+          <vulkan/vulkan_core.h> and <vulkan/vk_layer.h>, so vulkan-headers
+          is a required build-time input that never becomes a runtime
+          reference.
+        * conf.toml shape: version = 2; [global] with dll and allow_fp16;
+          repeated [[profile]] with name, active_in (string OR array),
+          gpu, multiplier, flow_scale, performance_mode, pacing.  Upstream
+          writes paths and enumerations as single-quoted literals.
+    Container surface
+        * Record <nonguix-container>, fields: name binary-name version
+          wrap-package run wrapper-name manifest-name internal-name
+          sandbox-home ld.so.conf ld.so.cache union64 union32
+          preserved-env exposed shared modules packages link-files
+          home-page synopsis description license.
+        * Accessors are named ngc-* and are ALL PUBLIC, including
+          ngc-packages and ngc-preserved-env.  Step 2.2 needs no private
+          access.
+        * %nvidia-environment-variable-regexps in (nongnu packages nvidia)
+          is private (9 entries).  The laptop's passthrough set must be
+          reconstructed locally or read through private access; whichever
+          is chosen must be documented at its site.
+        * The launcher honours GUIX_SANDBOX_HOME, and DEBUG=1 makes it
+          drop into an interactive shell inside the container.  That shell
+          is the verification tool for Phase 2.
+        * GUIX_SANDBOX_EXTRA_SHARES exists as a colon-separated escape
+          hatch; the design must not require it.
+    Environment
+        * Lossless.dll is installed at
+          $GUIX_SANDBOX_HOME/.local/share/Steam/steamapps/common/Lossless
+          Scaling/.  Inside the container that is the default search
+          location, so in-sandbox operation needs no dll configuration; on
+          the host it is unreachable by default, which is the sole reason
+          the service needs a dll-path field.
+    Closed items
+        * O1 CLOSED, accepted as correct output: etc/ld.so.cache is a
+          glibc-ld.so.cache produced by gnu-build-system's standard
+          make-dynamic-linker-cache phase, indexing the inputs' libraries
+          (375 entries).  It is not cruft and must not be deleted.  It is
+          also inert for our purposes: it contains mesa's libvulkan_*
+          drivers but not libvulkan.so.1, and no system-wide
+          /etc/ld.so.cache exists for glibc to consult.  I7's linker flag
+          is the mechanism that actually matters.
+        * O2 CLOSED by mutation: a stale hand-installed manifest at
+          ~/.local/share/vulkan/implicit_layer.d/ pinned
+          ~/.local/lib/liblsfg-vk-layer.so (a symlink to a superseded
+          output) and gated on LSFG_VK, a variable from an even earlier
+          experiment.  The loader searches $XDG_DATA_HOME/vulkan
+          unconditionally, so the file polluted even --pure shells.  Both
+          it and the symlink were removed; nothing outside the superseded
+          activation service and scratch transcripts referenced them.
 :: PHASE 1. PACKAGE — UPSTREAM-FAITHFUL BASELINE
 ================================================================================
     Goal: the simplest package that is correct, with every behavior
@@ -66,50 +177,61 @@ KEY INVARIANTS (reference)
     we know from observation — not assumption — whether an ungated
     implicit layer is safe.
     - Step 1.1: Audit the upstream 2.0 surface (discovery only).
-        * From a build of the current package, enumerate: the installed
-          file inventory, the layer manifest's name and contents, the
-          exact Vulkan layer identifier, the installed executables, and
-          the XDG files.
-        * Confirm against upstream documentation the complete set of
-          environment variables 2.0 reads, and confirm no enable/disable
-          variable other than DISABLE_LSFGVK exists.
-        * Record which CMake options are actually required for a
-          multi-binary install under a non-/usr prefix.
-        * No repository changes in this step.
-        Test: The inventory, the layer identifier, and the variable set
-        are enumerated and recorded.  Any discrepancy with the assumptions
-        in this document is reported before Step 1.2 is written.
+        Complete.  Results recorded under DISCOVERY RESULTS above.
     - Step 1.2: Reduce the package to its upstream-faithful form.
         * Remove the enable_environment patch.  It implements a gate that
           upstream 2.0 does not have, substitutes a variable outside the
           LSFGVK_ namespace, and is verified by invoking grep from the
           build.  Inertness in 2.0 is a property of profile matching, and
           that is the behavior the default must present (D2).
+        * Remove the visibility substitution: upstream already annotates
+          the loader entry point with default visibility, so the
+          substitution is inherited from 1.x and has no effect.
+        * Remove CMAKE_SKIP_RPATH, LSFGVK_BUILD_VK_LAYER and
+          LSFGVK_BUILD_CLI from the configure flags: the first cannot take
+          effect, the other two restate upstream defaults.  With both
+          phases and those flags gone the package needs no #:phases form.
         * Retain, and comment as load-bearing, the absolute store
-          library_path (I1) and the default-visibility substitution that
-          makes the loader's dlsym lookups resolve.
+          library_path (I1).
+        * Put the Vulkan loader on the RUNPATH of the executables only,
+          through the linker, so that their dlopen of libvulkan.so.1
+          resolves while the layer keeps bare-soname resolution (I7).
+          Without this, `lsfg-vk-cli benchmark' and the UI's GPU
+          enumeration fail on any system with no libvulkan on the default
+          search path — which includes this one.
         * Declare x86_64-only support (I5).
         * Classify inputs for correctness rather than convenience:
-          headers consumed by the compile belong to inputs.
+          headers consumed by the compile belong to inputs, and are
+          expected never to appear as runtime references.
         * Export the constants downstream layers will consume: the Vulkan
           layer identifier and the environment-variable regexp set (I3).
           Nothing downstream may glob the output to find them.
         * Do not introduce the container transformer yet; Phase 2 owns it.
-        Test: The package builds.  The installed tree matches the Step 1.1
-        inventory.  The manifest contains no enable_environment key, and
-        its library_path names a file that exists in the store.  The
-        exported layer identifier matches the manifest verbatim.
+        Test: The package builds via -L (I6).  The installed tree matches
+        the Step 1.1 inventory.  The manifest contains no
+        enable_environment key, still contains upstream's
+        disable_environment, and its library_path names a file that exists
+        in the store.  vkNegotiateLoaderLayerInterfaceVersion is still an
+        exported symbol with the substitution gone.  The executables'
+        RUNPATH contains the Vulkan loader and the LAYER'S DOES NOT (I7).
+        The exported layer identifier matches the manifest verbatim.
     - Step 1.3: Host behavior and inertness audit.
-        * Deploy via the existing home package list (the service arrives
-          in Phase 3; this step deliberately changes nothing structural).
+        * Exercise the working-tree build in isolation from any deployed
+          revision, so results are attributable (I6).
         * Confirm the loader discovers the layer with no environment
-          variable set, through the home profile's share directory alone.
-        * With no matching profile configured, confirm ordinary Vulkan
-          clients are unaffected: a trivial client, a video player, and
-          one game must all start and present normally, with and without
-          Lossless.dll present.
-        * Confirm lsfg-vk-ui starts and can write conf.toml, and that
-          lsfg-vk-cli validates it (I4).
+          variable set, exactly once, from the store manifest only.
+        * Evidence must be the loader's INSERTION of the layer, not its
+          listing of manifest files; the latter happens before any
+          enable/disable decision and proves nothing.
+        * With no matching profile, confirm ordinary Vulkan clients are
+          unaffected.
+        * With a matching profile but no reachable Lossless.dll — the
+          historically dangerous case — confirm the client still runs.
+        * Prove frame generation with `lsfg-vk-cli benchmark', which
+          exercises the DLL and the compute path deterministically and
+          without a swapchain or a window.
+        * Confirm lsfg-vk-ui starts, enumerates GPUs, and can write
+          conf.toml, and that lsfg-vk-cli validates it (I4).
         * Confirm DISABLE_LSFGVK suppresses the layer.
         CONSIDERATION: this step decides the weight of Phase 4.  If an
         ungated implicit layer is harmless, the gated and explicit
@@ -117,10 +239,11 @@ KEY INVARIANTS (reference)
         mechanisms — the default does not change — but Phase 4 is
         promoted ahead of Phase 3 and the service's recommended
         configuration is documented accordingly.
-        Test: Layer enumerated by the loader with no variables set; no
-        regression in any non-matching client; UI writes and CLI
-        validates a configuration; DISABLE_LSFGVK observably disables.
-        Findings recorded against the consideration above.
+        Test: Layer inserted once with no variables set; no regression in
+        any non-matching client; no crash in the matching-without-DLL
+        case; benchmark reports generated frames; UI enumerates GPUs and
+        the CLI validates a configuration; DISABLE_LSFGVK observably
+        prevents insertion.  Findings recorded against the consideration.
 COMPLETION — The package is minimal, upstream-faithful, verified on the
 host, and publishes the metadata later phases depend on.  The home
 configuration is unchanged except for the package itself.  ☐
@@ -130,46 +253,39 @@ configuration is unchanged except for the package itself.  ☐
     container membership alone, and the superseded staging machinery is
     deleted.  No file is copied, no manifest is rewritten.
     - Step 2.1: Audit the container and sandbox surface (discovery only).
-        * Confirm which container record accessors the pinned nonguix
-          exposes, and confirm the record can be transformed before being
-          converted to a package.  The channel set is pinned as a set
-          (channels/channels.scm); any accessor used must exist at the
-          pinned revision.
-        * From inside a running Steam container, confirm I1 and I2
-          directly: that /gnu/store is present and that the union's share
-          directory is reachable on the loader's default search path.
-        * Record how the container's preserved-env is composed for the
-          NVIDIA variants, so the laptop's passthrough set can be
-          reconstructed without depending on a nonguix-internal binding.
-        * No repository changes in this step.
-        Test: Accessor availability confirmed at the pinned revision; I1
-        and I2 confirmed by observation inside the container; the NVIDIA
-        passthrough composition is recorded.
+        Complete.  Results recorded under DISCOVERY RESULTS above.
     - Step 2.2: Add the container transformer to the package module.
         * A transformer that takes a nonguix container and returns it with
           lsfg-vk among its packages and the lsfg-vk variable regexps
-          added to its preserved-env.  It transforms a CONTAINER, not
-          Steam, so Heroic or any future container gains support for one
-          line.
+          added to its preserved-env, using the public ngc-* accessors.
+          It transforms a CONTAINER, not Steam, so Heroic or any future
+          container gains support for one line.
         * A thin convenience constructor producing a Steam package from a
           graphics driver and an additional passthrough set, mirroring
           nonguix' own steam-container-for composition so upstream churn
           is absorbed at one site.
-        * Nothing here may reference this repository's paths or the
-          maintainer's sandbox location.
-        Test: Both machine configurations build with the constructor
-        evaluated but not yet adopted.  The resulting Steam package's
-        closure contains lsfg-vk exactly once.
+        * The NVIDIA passthrough set is private in nonguix; the choice
+          between reconstructing it and reading it privately is made here
+          and documented at its site.
+        * Nothing here may reference the configuration repository's paths
+          or the maintainer's sandbox location.
+        * B1 gates this step's test and must be resolved first.
+        Test: Both machine configurations build.  The resulting Steam
+        package's closure contains lsfg-vk exactly once, and the union's
+        share/vulkan/implicit_layer.d contains the layer manifest.
     - Step 2.3: Adopt the constructor per machine.
         * Desktop: the mesa-backed variant.
         * Laptop: the NVIDIA-backed variant, with the NVIDIA passthrough
           set carried through, and the driver bound by Scheme variable
           rather than by specification (design.txt SECTION 10).
-        Test: Both machines build.  After reconfigure on the desktop,
-        Steam launches; the layer is enumerated by the loader from INSIDE
-        the container with no staged files present; a profile matching a
-        Steam game activates frame generation; DISABLE_LSFGVK set in that
-        game's launch options suppresses it.
+        * The channel must be committed, pushed and pulled before any
+          reconfigure-based test, because a reconfigure consumes the
+          pulled revision, not the working tree (I6).
+        Test: Both machines build.  After reconfigure, DEBUG=1 on the
+        launcher shows the layer manifest on the loader's default search
+        path inside the container with no staged files present; a profile
+        matching a Steam game activates frame generation; DISABLE_LSFGVK
+        set in that game's launch options suppresses it.
     - Step 2.4: Remove the superseded staging machinery.
         * Delete the sandbox activation service from the home
           configuration in its entirety.
@@ -187,8 +303,8 @@ name.  ☐
     reproduces Phase 2 behavior exactly — installing the package and
     nothing more (D2) — and which escalates only on request.
     - Step 3.1: Introduce the service with an inert default.
-        * A new module under the repository's service namespace, defining
-          a configuration record and a home service type that extends the
+        * A new module in the channel's service namespace, defining a
+          configuration record and a home service type that extends the
           home profile with the package.
         * Default value: package only.  No environment variables, no
           configuration file, no activation snippet.  Instantiating the
@@ -204,7 +320,8 @@ name.  ☐
         * Extend the configuration record with the global settings and a
           profile record matching upstream's documented option set
           one-for-one, named in Scheme convention but serializing to
-          upstream's exact keys.  Profile fields include the GPU
+          upstream's exact keys and quoting style.  active_in must accept
+          both of upstream's forms.  Profile fields include the GPU
           selector, which Phase 5 will supply per machine.
         * Add a mode selector with three values: the upstream default
           (the service writes nothing), seed (the file is written only if
@@ -243,8 +360,8 @@ is upstream's workflow; reproducibility is available on request.  ☐
           policy: the upstream implicit layer (the default, returned
           unchanged), a gated implicit layer, and an explicit layer.
         * The gate variable must fall under the LSFGVK_ prefix (I3) so the
-          sandbox passthrough set is unchanged.  Its name must not collide
-          with any variable upstream 2.0 reads, per the Step 1.1 audit.
+          sandbox passthrough set is unchanged, and must not collide with
+          any of the eleven variables upstream 2.0 already reads.
         * The explicit policy relocates the manifest so that the loader
           never loads the layer unless the layer is named explicitly.  Its
           documented cost is that upstream's automatic profile matching
@@ -264,8 +381,8 @@ is upstream's workflow; reproducibility is available on request.  ☐
           host session and the sandbox; the container transformer's
           regexp set must already cover it by construction (I3).
         Test: Home builds under each policy.  Under the gated policy the
-        layer is absent from the loader's enumeration until the variable
-        is set, and present when it is, both on the host and inside the
+        layer is absent from the loader's insertion until the variable is
+        set, and present when it is, both on the host and inside the
         Steam container.  Under the explicit policy the layer loads only
         when named, and the default policy is byte-for-byte unchanged from
         Phase 3.
@@ -283,25 +400,26 @@ and the others are one field away.  ☐
         * The dispatch must carry per-machine home values generally, not
           lsfg-vk values specifically; lsfg-vk is its first consumer.
         * No behavior change on the desktop.
-        Test: Home builds for both machines from the desktop via the
-        override.  The desktop's built home environment is unchanged from
-        Phase 3/4 except where a per-machine value is intentionally
-        introduced.
+        Test: Home builds for both machines from one machine via the
+        override.  The current machine's built home environment is
+        unchanged from Phase 3/4 except where a per-machine value is
+        intentionally introduced.
     - Step 5.2: Supply the GPU selector per machine.
         * Desktop: the discrete AMD GPU.
         * Laptop: the NVIDIA dGPU, because frame generation must run on
           the same GPU as the application and the application is
           PRIME-offloaded to the dGPU while the primary GPU is the Intel
           iGPU (design.txt SECTION 9).  Upstream's documented failure mode
-          for this mismatch is a black screen at launch.
+          for this mismatch is a black screen at launch.  Note that the
+          layer has already been observed selecting the dGPU by default on
+          the laptop while the application ran on the iGPU, so the hazard
+          is live rather than hypothetical.
         * The selector's form must be taken from what the driver actually
           reports on each machine, not assumed.
-        Test: Both home environments build.  On the desktop, frame
-        generation works with the selector set explicitly.  On the laptop
-        (deferred to that machine's availability), a PRIME-offloaded game
-        with the dGPU selected launches and generates frames, and the
-        iGPU-selected case is confirmed to be the failure it is predicted
-        to be, so the requirement is documented by observation.
+        Test: Both home environments build.  Frame generation works with
+        the selector set explicitly on each machine, and the mismatched
+        case is confirmed to be the failure it is predicted to be, so the
+        requirement is documented by observation.
 COMPLETION — The home configuration is machine-aware, and the GPU
 selector is correct on each machine rather than left to chance.  ☐
 :: PHASE 6. OUTPUT SPLIT
@@ -312,7 +430,8 @@ selector is correct on each machine rather than left to chance.  ☐
         * The default output carries the layer, its manifest, and the CLI.
           A separate output carries the GUI and its XDG files.
         * The split must not change any installed path that the layer
-          manifest or the XDG files reference.
+          manifest or the XDG files reference, and must preserve the
+          executables' Vulkan loader RUNPATH (I7).
         * The GUI output must remain correctly wrapped for its toolkit
           when installed on its own.
         Test: The package builds with both outputs.  The default output's
@@ -344,13 +463,13 @@ COMPLETION — Each consumer takes only what it can use.  ☐
         Test: Every path above behaves as documented; failures are fixed
         within this step rather than deferred.
     - Step 7.2: Record the design.
-        * Add an lsfg-vk section to documents/design.txt covering the
-          ownership split, the four invariants, the activation policies
-          and their costs, the conf.toml mutability decision, and the
-          hybrid-graphics GPU requirement.
+        * Add an lsfg-vk section to the configuration repository's
+          design document covering the ownership split, the invariants,
+          the activation policies and their costs, the conf.toml
+          mutability decision, and the hybrid-graphics GPU requirement.
         * Confirm this roadmap's steps are all marked, and that no
-          superseded artifact remains anywhere in the repository.
-        Test: A recursive grep for the removed staging paths and for the
+          superseded artifact remains in either repository.
+        Test: A recursive grep for the removed staging paths and for any
         non-upstream gate variable name returns only intentional matches.
         Both system configurations and both home configurations build.
 COMPLETION — lsfg-vk is owned entirely by the package, the service, and
