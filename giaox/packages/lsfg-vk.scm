@@ -94,6 +94,11 @@
       ;; And upstream's manifest already carries disable_environment with
       ;; DISABLE_LSFGVK, which is 2.0's own opt-out; activation in 2.0 is a
       ;; property of profile matching, so no gate is synthesized here.
+      ;;
+      ;; NOTE: this field is honest documentation, not enforcement.  A
+      ;; consumer that passes #:system explicitly — such as nonguix'
+      ;; fhs-union — never consults it, and will happily attempt an i686
+      ;; build.  See container-with-lsfg-vk.
       (supported-systems '("x86_64-linux"))
       (inputs
        (list qtdeclarative
@@ -130,8 +135,8 @@ at run time.")
 ;;;
 
 (define-public (container-with-lsfg-vk container)
-  "Return CONTAINER with lsfg-vk among its packages and lsfg-vk's environment
-variables added to its preserved-env.
+  "Return CONTAINER with lsfg-vk among its 64-bit packages and lsfg-vk's
+environment variables added to its preserved-env.
 
 Membership is the whole mechanism.  The layer manifest lands in the FHS
 union's share/vulkan/implicit_layer.d, which the container mounts at
@@ -142,17 +147,27 @@ absolute store library_path resolve inside the sandbox.  Nothing is copied
 and nothing is rewritten.
 
 Only environment variables must still be let through explicitly, which is
-what preserved-env is for.
-
-lsfg-vk is deliberately not added to union32: it is x86_64-only.  A 32-bit
-client in the container will read the 64-bit manifest from the shared
-/usr/share, fail to load the library and skip the layer, which is the same
-thing that happens on any distribution, since upstream does not
-architecture-suffix its manifest the way nvidia_layers and MangoHud do."
+what preserved-env is for."
   (nonguix-container
    (inherit container)
    (packages (append (ngc-packages container)
                      `(("lsfg-vk" ,lsfg-vk))))
+   ;; union32 must be pinned, not inherited.  It is a DELAYED field whose
+   ;; default is computed from `packages', so appending lsfg-vk there adds it
+   ;; to the 32-bit union as well — which attempts an i686 lsfg-vk and hence
+   ;; an i686 qtdeclarative, and that does not build.  Forcing the field on
+   ;; CONTAINER, whose packages predate our addition, reproduces exactly the
+   ;; 32-bit union nonguix composed, without restating nonguix' formula here.
+   ;;
+   ;; lsfg-vk's (supported-systems '("x86_64-linux")) does NOT prevent this:
+   ;; fhs-union passes #:system explicitly and never consults it.
+   ;;
+   ;; The consequence is accepted: a 32-bit client in the container reads the
+   ;; 64-bit manifest from the shared /usr/share, fails to load the library
+   ;; and skips the layer, logging a loader error.  That is upstream's
+   ;; situation on every distribution, since upstream does not
+   ;; architecture-suffix its manifest the way nvidia_layers and MangoHud do.
+   (union32 (ngc-union32 container))
    (preserved-env (append %lsfg-vk-environment-variable-regexps
                           (ngc-preserved-env container)))))
 
