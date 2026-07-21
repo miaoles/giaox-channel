@@ -126,9 +126,7 @@ at run time.")
 ;;; variants in (nongnu packages nvidia) rather than in (nongnu packages
 ;;; game-client).
 ;;;
-;;; These imports are why .guix-channel must declare nonguix as a dependency:
-;;; `guix pull' compiles this module with only the declared dependencies on
-;;; the load path, and -L masks the omission.
+;;; These imports are why .guix-channel must declare nonguix as a dependency.
 ;;;
 
 (define-public (container-with-lsfg-vk container)
@@ -159,25 +157,22 @@ architecture-suffix its manifest the way nvidia_layers and MangoHud do."
                           (ngc-preserved-env container)))))
 
 (define-public (steam-with-lsfg-vk driver preserved-env)
-  "Return a Steam package built on DRIVER with lsfg-vk available inside the
-container, passing the list of regexps PRESERVED-ENV through the sandbox in
-addition to lsfg-vk's own variables.
+  "Return a Steam package built on DRIVER, with lsfg-vk available inside the
+container and PRESERVED-ENV passed through the sandbox in addition to
+lsfg-vk's own variables.
 
 Composition re-enters at the container level through steam-container-for,
 because nonguix-container->package discards the record and nonguix' own NVIDIA
-variants are produced by a private macro.  Keeping the composition in terms of
+variants are produced by a private macro.  Expressing this in terms of
 nonguix' public steam-container-for means upstream churn is absorbed at this
 one site.
 
-Both arguments are required and positional.  define*-public is unbound in the
-module context Guix evaluates channel code in, so keyword arguments would need
-a separate export clause; and a default driver would be correct for only one
-machine anyway.  The driver and its passthrough set are machine concerns,
-supplied by the machine configuration — which is also what keeps this module
-free of any NVIDIA knowledge.
-
-The result is named \"steam\", as nonguix names it: renaming the container
-would rename the steam command itself.  Bind it by Scheme variable."
+Both arguments are required and positional.  They are parameters rather than
+conditionals so that this module stays free of any knowledge of a particular
+graphics driver: the driver and its sandbox passthrough set are machine
+concerns, supplied by the machine configuration.  And neither is defaulted,
+because a default that suits one machine would be silently wrong on the
+other."
   (let ((container (steam-container-for driver)))
     (nonguix-container->package
      (container-with-lsfg-vk
