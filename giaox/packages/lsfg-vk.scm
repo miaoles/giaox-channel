@@ -7,10 +7,6 @@
   #:use-module (gnu packages gl)
   #:use-module (gnu packages qt)
   #:use-module (gnu packages vulkan)
-  ;; steam-container-for lives in game-client; there is no steam-client
-  ;; module.  Both nonguix imports require the nonguix channel dependency
-  ;; declared in .guix-channel, or this module will not compile under
-  ;; `guix pull' even though it evaluates fine under `guix build -L'.
   #:use-module (nongnu packages game-client)
   #:use-module (nonguix multiarch-container))
 
