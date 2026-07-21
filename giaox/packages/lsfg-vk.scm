@@ -7,7 +7,7 @@
   #:use-module (gnu packages gl)
   #:use-module (gnu packages qt)
   #:use-module (gnu packages vulkan)
-  #:use-module (nongnu packages game-client)
+  #:use-module (nongnu packages)
   #:use-module (nonguix multiarch-container))
 
 ;; The Vulkan layer identifier, exactly as upstream's
