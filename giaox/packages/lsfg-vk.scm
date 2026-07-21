@@ -4,8 +4,11 @@
   #:use-module (guix gexp)
   #:use-module (guix build-system qt)
   #:use-module ((guix licenses) #:prefix license:)
+  #:use-module (gnu packages gl)
   #:use-module (gnu packages qt)
-  #:use-module (gnu packages vulkan))
+  #:use-module (gnu packages vulkan)
+  #:use-module (nongnu packages game-client)
+  #:use-module (nonguix multiarch-container))
 
 ;; The Vulkan layer identifier, exactly as upstream's
 ;; VkLayer_LSFGVK_frame_generation.json.in writes it.  Published so that
@@ -113,3 +116,63 @@ according to the profiles in @file{~/.config/lsfg-vk/conf.toml}, which
 @file{Lossless.dll} from an installation of Lossless Scaling to be reachable
 at run time.")
       (license license:gpl3+))))
+
+
+;;;
+;;; Container integration.
+;;;
+;;; Making a Vulkan layer reachable inside an FHS container is a property of
+;;; the layer, not of the application, so it lives here rather than in a
+;;; game-client module — mirroring nonguix, which defines its steam-nvidia
+;;; variants in (nongnu packages nvidia) rather than in (nongnu packages
+;;; game-client).
+;;;
+
+(define-public (container-with-lsfg-vk container)
+  "Return CONTAINER with lsfg-vk among its packages and lsfg-vk's environment
+variables added to its preserved-env.
+
+Membership is the whole mechanism.  The layer manifest lands in the FHS
+union's share/vulkan/implicit_layer.d, which the container mounts at
+/usr/share and which is on the Vulkan loader's default search path, so no
+environment variable is needed to find it.  And because the container mounts
+the closure of its own manifest, membership is also what makes the manifest's
+absolute store library_path resolve inside the sandbox.  Nothing is copied
+and nothing is rewritten.
+
+Only environment variables must still be let through explicitly, which is
+what preserved-env is for.
+
+lsfg-vk is deliberately not added to union32: it is x86_64-only.  A 32-bit
+client in the container will read the 64-bit manifest from the shared
+/usr/share, fail to load the library and skip the layer, which is the same
+thing that happens on any distribution, since upstream does not
+architecture-suffix its manifest the way nvidia_layers and MangoHud do."
+  (nonguix-container
+   (inherit container)
+   (packages (append (ngc-packages container)
+                     `(("lsfg-vk" ,lsfg-vk))))
+   (preserved-env (append %lsfg-vk-environment-variable-regexps
+                          (ngc-preserved-env container)))))
+
+(define*-public (steam-with-lsfg-vk #:key (driver mesa) (preserved-env '()))
+  "Return a Steam package built on DRIVER with lsfg-vk available inside the
+container, passing PRESERVED-ENV through the sandbox in addition to lsfg-vk's
+own variables.
+
+Composition re-enters at the container level through steam-container-for,
+because nonguix-container->package discards the record and nonguix' own
+NVIDIA variants are produced by a private macro.  Keeping the composition in
+terms of nonguix' public steam-container-for means upstream churn is absorbed
+at this one site.
+
+DRIVER and PRESERVED-ENV are parameters rather than conditionals so that this
+module stays free of any NVIDIA knowledge: the driver and its passthrough set
+are machine concerns and are supplied by the machine configuration."
+  (let ((container (steam-container-for driver)))
+    (nonguix-container->package
+     (container-with-lsfg-vk
+      (nonguix-container
+       (inherit container)
+       (preserved-env (append preserved-env
+                              (ngc-preserved-env container))))))))
