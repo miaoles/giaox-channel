@@ -16,9 +16,9 @@ OVERVIEW
     Work proceeds per documents/conventions.txt in the giaox repository:
     one step at a time, full-file delivery, a single verification bucket
     per step, maintainer verification before the next step begins.
-    Phases 4, 5 and 6 are independent of one another and may be reordered
-    or dropped at the maintainer's discretion — with one exception now
-    known: OB2 may require Phase 5 before Step 2.3's end-to-end assertion.
+    Phase order stands as written.  Phases 4, 5 and 6 are independent of
+    one another and may be reordered or dropped at the maintainer's
+    discretion.
 OWNERSHIP (reference)
     PACKAGE   giaox-channel: giaox/packages/lsfg-vk.scm
         Builds the layer, the CLI and the UI.  Guarantees the layer
@@ -33,7 +33,7 @@ OWNERSHIP (reference)
         Contains NO site policy, NO paths belonging to the configuration
         repository, NO machine-specific values, and NO knowledge of any
         particular GPU driver: the driver and its passthrough set are
-        parameters.
+        required positional parameters with no defaults.
     SERVICE   giaox-channel: giaox/services/lsfg-vk.scm
         A HOME service: everything it does is per-user — it writes
         $XDG_CONFIG_HOME/lsfg-vk/conf.toml, which upstream documents as
@@ -42,11 +42,8 @@ OWNERSHIP (reference)
         file-organizer home service rather than in a new home/services
         subtree, per maintainer decision.
         Holds defaults defensible for any user, not for this machine.
-        The TOML serializer is to be a plain procedure, not logic buried
-        in the service type, because upstream also reads
-        /etc/lsfg-vk/conf.toml and a system service could therefore reuse
-        it verbatim later.  That system service is a recorded option, not
-        a commitment.
+        See D8 for how the system variant stays possible without a
+        refactor.
     MACHINES  giaox: machines/*/main.scm
         The GPU identity, the Steam variant, the graphics driver, and the
         driver's sandbox passthrough set.
@@ -57,7 +54,7 @@ KEY INVARIANTS (reference)
     I1  The layer manifest's library_path is an absolute store path, and
         that path resolves inside a nonguix container EXACTLY WHEN the
         package is a member of that container.  The launcher runs
-        `guix shell --container -m <manifest>`, which mounts the closure of
+        `guix shell --container -m <manifest>', which mounts the closure of
         the container manifest — not the whole store.  Membership and
         path validity are therefore one fact, not two.  Nothing may ever
         rewrite this path; rewriting it is what the superseded staging
@@ -80,12 +77,15 @@ KEY INVARIANTS (reference)
         itself.  The default configuration must never make it read-only.
     I5  lsfg-vk is x86_64-only.  This must be declared, both for honesty
         and to keep the package out of any 32-bit FHS union.
-    I6  The channel is consumed by `guix pull`, so `guix build lsfg-vk'
+    I6  The channel is consumed by `guix pull', so `guix build lsfg-vk'
         exercises the PULLED revision, not the working tree.  Every
         verification of an unpushed change must go through
         `guix build -L <channel>' / `guix shell -L <channel>' /
         `guix repl -L <channel>' / `guix system build -L <channel>'.  A
         bucket that omits -L proves nothing about the file under review.
+        COROLLARY, learned the hard way: when a -L load fails, `guix shell'
+        warns and silently falls back to the PULLED package.  Any result
+        obtained after such a warning must be attributed with care.
     I7  The LAYER must resolve the Vulkan loader by bare soname; only the
         EXECUTABLES may be pointed at a specific one.  lsfg-vk-common
         dlopens "libvulkan.so.1" and is a STATIC library linked into all
@@ -100,10 +100,20 @@ KEY INVARIANTS (reference)
         executables through the linker, never through the source.
         VERIFIED by objdump: the layer's RUNPATH is glibc and gcc only;
         both executables carry vulkan-loader.
-    I8  Verification buckets must not depend on tools absent from this
-        system.  patchelf is NOT installed; objdump, nm and strings are.
-        A check that silently yields empty output is worse than no check:
-        one round of I7 verification was lost to exactly that.
+    I8  Verification buckets must not depend on anything unverified about
+        the environment.  Two rounds were lost to this: patchelf is NOT
+        installed (objdump, nm and strings are), and define*-public is NOT
+        bound in this Guile/Guix context.  A check that silently yields
+        empty output, or a construct that is assumed to exist, is worse
+        than no check at all.
+    I9  A module in this channel may import ONLY what .guix-channel
+        declares as a dependency.  `guix pull' compiles the channel with
+        just those modules on the load path, and one uncompilable module
+        fails the entire channel derivation — there is no containment.
+        Neither -L nor `guix repl' reveals the omission, because pulled
+        channels are already on the CLI's load path.  Therefore: every new
+        cross-channel import requires a .guix-channel change, and the
+        verification of any such change MUST include an actual pull.
 DECISIONS (locked)
     D1  Activation policies: upstream implicit (default) plus opt-in gated
         and explicit variants, selected by the service, never baked into
@@ -130,6 +140,27 @@ DECISIONS (locked)
         to the package module (nonguix precedent).  The service is a home
         service at giaox/services/lsfg-vk.scm, beside the channel's
         existing home service, rather than in a new home/services subtree.
+    D7  nonguix is declared as a .guix-channel dependency (I9), with an
+        introduction so that it is authenticated in the dependency
+        position as well as in channels/channels.scm.  Rejected
+        alternatives: moving the container code into the configuration
+        repository, where `load'ed files escape channel compilation —
+        rejected because it splits the design across two repositories and
+        demotes reusable library code to configuration glue; and deferring
+        the import to runtime via resolve-interface — rejected because it
+        hides a real dependency behind a trick.  The accepted cost is that
+        this channel's valid window is now the intersection of its guix and
+        nonguix windows.
+    D8  Home and system service types cannot be unified: the two service
+        graphs are disjoint (home-profile-service-type vs
+        profile-service-type, home-files-service-type vs
+        etc-service-type), and upstream always writes two types when both
+        make sense.  Therefore the configuration records, the TOML
+        serializer — a plain procedure from configuration to file-like —
+        and the policy/package selection are written as shared module-level
+        definitions, and only the HOME service type is built.  A future
+        system type writing /etc/lsfg-vk/conf.toml is then an addition,
+        never a refactor.
 ACCEPTED LIMITATIONS
     L1  A 32-bit Vulkan client inside the Steam container reads the
         64-bit layer manifest from the shared /usr/share, fails to load
@@ -146,15 +177,14 @@ ACCEPTED LIMITATIONS
         because only the container's manifest is visible inside the
         container and only the home profile's on the host.
 EXTERNAL BLOCKERS
-    B1  At guix revisions after the 2026-07-17 generation, `nix' failed its
-        check phase on eval-okay-fromTOML-timestamps with no substitute
-        available, blocking `guix system build' and `guix system
-        reconfigure'.  Addressed by a tests-disabled variant in this
-        channel, (giaox packages nix), selected through nix-configuration.
-        STATUS: variant in place and verified.  Whether the stock package
-        now builds is to be re-probed; if it does, the variant and its
-        nix-configuration field are to be removed under SECTION 9 cleanup
-        discipline rather than carried indefinitely.
+    B1  At current guix revisions `nix' fails its check phase on
+        eval-okay-fromTOML-timestamps.  Addressed by a tests-disabled
+        variant, (giaox packages nix), selected through nix-configuration.
+        STATUS: STILL REQUIRED.  Re-probed: 0 of 1 substitutes on
+        substitutes.nonguix.org, bordeaux and ci; stock nix would still be
+        built; the running system is on nix-without-tests-2.25.5.  To be
+        removed under SECTION 9 cleanup discipline once upstream
+        regenerates its expectation.
 DISCOVERY RESULTS (locked; Steps 1.1 and 2.1 complete)
     Upstream surface
         * Layer identifier: VK_LAYER_LSFGVK_frame_generation.
@@ -188,7 +218,7 @@ DISCOVERY RESULTS (locked; Steps 1.1 and 2.1 complete)
           gpu, multiplier, flow_scale, performance_mode, pacing.  Upstream
           writes paths and enumerations as single-quoted literals.
         * The binaries also reference /etc/lsfg-vk/conf.toml, so a
-          system-wide configuration path exists.  See OWNERSHIP.
+          system-wide configuration path exists.  See D8.
     Container surface
         * Record <nonguix-container>, fields: name binary-name version
           wrap-package run wrapper-name manifest-name internal-name
@@ -203,6 +233,9 @@ DISCOVERY RESULTS (locked; Steps 1.1 and 2.1 complete)
           is the verification tool for Step 2.3.
         * GUIX_SANDBOX_EXTRA_SHARES exists as a colon-separated escape
           hatch; the design must not require it.
+        * .guix-channel dependency metadata accepts an introduction in the
+          form (introduction (channel-introduction (version 0) (commit ...)
+          (signer ...))); verified by parsing candidates before committing.
     Environment
         * Lossless.dll is installed at
           $GUIX_SANDBOX_HOME/.local/share/Steam/steamapps/common/Lossless
@@ -210,6 +243,10 @@ DISCOVERY RESULTS (locked; Steps 1.1 and 2.1 complete)
           location, so in-sandbox operation needs no dll configuration; on
           the host it is unreachable by default, which is the sole reason
           the service needs a dll-path field.
+        * Devices on the laptop, as the Vulkan loader reports them:
+          "Intel(R) Iris(R) Xe Graphics (ADL GT2)" (integrated) and
+          "NVIDIA RTX A2000 Laptop GPU" (discrete).  These strings are the
+          material for Phase 5's selector.
     Closed items
         * O1 CLOSED, accepted as correct output: etc/ld.so.cache is a
           glibc-ld.so.cache produced by gnu-build-system's standard
@@ -227,10 +264,31 @@ DISCOVERY RESULTS (locked; Steps 1.1 and 2.1 complete)
           unconditionally, so the file polluted even --pure shells and was
           in fact the ONLY manifest those shells ever saw.  Both it and the
           symlink were removed.
+        * OB1 ACCEPTED as upstream behaviour: when no profile matches, the
+          layer declines loader negotiation.  The loader then looks for
+          vkGetInstanceProcAddr, does not find it, logs two ERROR lines and
+          SKIPS the layer.  Clients are unaffected and exit cleanly, so
+          this is noise rather than breakage — but every Vulkan client on a
+          machine with lsfg-vk installed and idle logs those two errors.
+          Nothing in the package can change it.  It is a concrete argument
+          for Phase 4's policies for anyone who wants clean loader logs.
+        * OB2 CLOSED AND CLASSIFIED as a GPU mismatch, by experiment:
+            vkcube --gpu_number 0 (Intel iGPU) — exit 0, layer active,
+              no errors.
+            vkcube --gpu_number 1 (NVIDIA dGPU) — hang, preceded by
+              vkAllocateMemory() failed (error -1000072003), i.e.
+              VK_ERROR_INVALID_EXTERNAL_HANDLE.
+          lsfg-vk defaults to the primary device (GPU 0); when the
+          application is elsewhere, the shared external allocation fails
+          and the application hangs.  Not a packaging defect.
+          CONSEQUENCE: any test of frame generation in an application that
+          is PRIME-offloaded to the dGPU MUST set the gpu key (in
+          conf.toml) or LSFGVK_GPU.  That includes Step 2.3's end-to-end
+          Steam test on the laptop, which can set it by hand today; Phase 5
+          makes it declarative and machine-dispatched.  No phase reordering
+          is required.
 :: PHASE 1. PACKAGE — UPSTREAM-FAITHFUL BASELINE
 ================================================================================
-    Goal: the simplest package that is correct, with every behavior
-    inherited from upstream rather than imposed by us.
     - Step 1.1: Audit the upstream 2.0 surface (discovery only).
         Complete.  Results under DISCOVERY RESULTS.
     - Step 1.2: Reduce the package to its upstream-faithful form.
@@ -253,44 +311,21 @@ DISCOVERY RESULTS (locked; Steps 1.1 and 2.1 complete)
         not; benchmark succeeds with no LD_LIBRARY_PATH; the UI's former
         "Cannot read property 'gpus' of null" errors are gone.
     - Step 1.3: Host behavior and inertness audit.
-        Complete, with two observations carried forward.
-        Verified: exactly one manifest on the loader's search path, the
-        store one; insertion proven by the loader's own "Insert instance
-        layer" line; profile matching proven by lsfg-vk's "using profile
-        with name ... (identified via executable)"; DISABLE_LSFGVK yields
-        zero insertion lines; a non-matching client exits cleanly; a
+        Complete.  Verified: exactly one manifest on the loader's search
+        path, the store one; insertion proven by the loader's own "Insert
+        instance layer" line; profile matching proven by lsfg-vk's "using
+        profile with name ... (identified via executable)"; DISABLE_LSFGVK
+        yields zero insertion lines; a non-matching client exits cleanly; a
         matching client with no reachable DLL does not crash; CLI validates;
         the UI launches with no QML errors; frame generation demonstrated by
         `lsfg-vk-cli benchmark' (172 generated frames).
-        OB1  When no profile matches, the layer declines loader negotiation.
-             The loader then looks for vkGetInstanceProcAddr, does not find
-             it, logs two ERROR lines and SKIPS the layer.  Clients are
-             unaffected and exit cleanly, so this is noise rather than
-             breakage — but every Vulkan client on a machine with lsfg-vk
-             installed and idle logs those two errors.  This is upstream
-             behaviour, not packaging, and nothing in the package can
-             change it.  It is a concrete argument for Phase 4's policies
-             for anyone who wants clean loader logs.
-        OB2  With the layer ACTIVE in an isolated mesa-only shell on the
-             laptop, vkcube hung; with an explicit DLL it reported
-               failed to create swapchain context
-               vkAllocateMemory() failed (error -1000072003)
-             which is VK_ERROR_INVALID_EXTERNAL_HANDLE — the signature of
-             frame generation and the application running on DIFFERENT
-             devices.  vkcube selected GPU 1 (the A2000) while lsfg-vk
-             defaults to the primary GPU.  Everything packaging-dependent
-             succeeded in that run, and the benchmark path works, so this
-             is believed to be the hazard Phase 5 exists to prevent rather
-             than a packaging defect.  REASSIGNED TO PHASE 5, and a
-             discriminator is to be run before Step 2.3's end-to-end
-             assertion is trusted.
+        Observations OB1 and OB2 recorded and closed above.
         CONSIDERATION, resolved: an ungated implicit layer does not break
         non-matching clients and does not crash a matching client with no
         DLL, so Phase 4 remains an opt-in convenience sequenced after
         Phase 3, exactly as written.  OB1 is the only cost.
 COMPLETION — The package is minimal, upstream-faithful, verified on the
-host, and publishes the metadata later phases depend on.  OB1 accepted as
-upstream behaviour; OB2 reassigned to Phase 5.  ✓
+host, and publishes the metadata later phases depend on.  ✓
 :: PHASE 2. STEAM SANDBOX INTEGRATION
 ================================================================================
     Goal: the layer is reachable inside nonguix' Steam container by
@@ -307,34 +342,37 @@ upstream behaviour; OB2 reassigned to Phase 5.  ✓
         * A Steam constructor parameterised by driver and by an additional
           passthrough set, re-entering composition at nonguix' public
           steam-container-for so upstream churn is absorbed at one site.
+          Both parameters positional and required: define*-public is not
+          bound in this context (I8), and a default driver would be
+          silently wrong on one of the two machines.
         * No NVIDIA knowledge in this module: the driver and its
-          passthrough set are parameters supplied by the machine layer
-          (D5, OWNERSHIP).
+          passthrough set are supplied by the machine layer (D5).
         * lsfg-vk is not added to union32 (I5, L1).
+        * nonguix must be a declared channel dependency (I9, D7).
         Test: the constructed Steam package evaluates and builds; its
         closure contains lsfg-vk exactly once; the FHS union's
-        share/vulkan/implicit_layer.d contains the layer manifest; the
-        container's preserved-env contains both lsfg-vk's regexps and any
-        supplied set; the NVIDIA-driver variant evaluates with the
-        passthrough set read per D5.
+        share/vulkan/implicit_layer.d contains the layer manifest, whose
+        library_path names an output inside the container closure; the
+        generated launcher's preserved-env contains lsfg-vk's regexps; the
+        NVIDIA-driver variant evaluates with the passthrough set read per
+        D5; and all of the above holds through an actual `guix pull', not
+        only through -L (I9).
     - Step 2.3: Adopt the constructor per machine.
-        * Desktop: the mesa-backed variant.
+        * Desktop: the mesa-backed variant, with an empty passthrough set.
         * Laptop: the NVIDIA-backed variant, with nonguix' NVIDIA
           passthrough set read per D5 IN THE MACHINE FILE, and the driver
           bound by Scheme variable rather than by specification
           (design.txt SECTION 10).
         * The channel must be committed, pushed and pulled before any
-          reconfigure-based test, because a reconfigure consumes the
-          pulled revision, not the working tree (I6).
-        * SPLIT: the static half (both machines build; the manifest is on
-          the loader's default search path inside the container, shown with
-          DEBUG=1) is verified here.  The end-to-end half — a Steam game
-          actually generating frames — is gated on OB2, and may require
-          Phase 5's GPU selector first.
-        Test: both machines build; DEBUG=1 shows the manifest inside the
-        container with no staged files present; DISABLE_LSFGVK in a game's
-        launch options suppresses the layer; frame generation in a game
-        once OB2 is resolved.
+          reconfigure-based test (I6, I9).
+        * The laptop's end-to-end test must set the gpu key for the dGPU,
+          by hand in conf.toml, or it will reproduce OB2 inside the
+          container.
+        Test: both machines build; DEBUG=1 on the launcher shows the
+        manifest on the loader's default search path inside the container
+        with no staged files present; a matching profile activates frame
+        generation in a Steam game; DISABLE_LSFGVK in that game's launch
+        options suppresses it.
     - Step 2.4: Remove the superseded staging machinery.
         * Delete the sandbox activation service from the home
           configuration in its entirety.
@@ -369,8 +407,8 @@ name.  ☐
           matching upstream's option set one-for-one, named in Scheme
           convention but serializing to upstream's exact keys and quoting
           style.  active_in must accept both of upstream's forms.
-        * The serializer is a plain procedure, reusable by a future system
-          service writing /etc/lsfg-vk/conf.toml (OWNERSHIP).
+        * Records, serializer and policy selection are shared definitions,
+          not service-type internals (D8).
         * Mode selector: upstream default (writes nothing), seed (written
           only if absent, left writable), declarative (Step 3.3).  Default
           stays the upstream default (D2, I4).
@@ -422,7 +460,8 @@ is upstream's workflow; reproducibility is available on request.  ☐
 ================================================================================
     Goal: give the shared home configuration the per-machine dispatch it
     has always needed, and use it to supply the GPU selector.  OB2 makes
-    this phase load-bearing rather than a refinement.
+    this phase load-bearing rather than a refinement: without the selector,
+    any application offloaded to the dGPU hangs.
     - Step 5.1: Introduce machine dispatch in the home configuration.
         * Mirror the system configuration's mechanism: machine identity
           with an environment-variable override so either machine's home
@@ -431,26 +470,21 @@ is upstream's workflow; reproducibility is available on request.  ☐
           is its first consumer.
         Test: Home builds for both machines from one machine via the
         override, with no unintended change to the current machine.
-    - Step 5.2: Resolve OB2 and supply the GPU selector per machine.
-        * First classify OB2: confirm by experiment that aligning the
-          application's device with lsfg-vk's selected device removes the
-          VK_ERROR_INVALID_EXTERNAL_HANDLE failure and the hang.  If it
-          does not, OB2 returns to Phase 1 as a packaging defect.
+    - Step 5.2: Supply the GPU selector per machine.
+        * OB2 is already classified; what remains is the VALUE.
         * Desktop: the discrete AMD GPU.
-        * Laptop: the NVIDIA dGPU, because frame generation must run on the
-          same GPU as the application and the application is PRIME-offloaded
-          to the dGPU while the primary GPU is the Intel iGPU
-          (design.txt SECTION 9).
-        * The selector's form must be taken from what the driver actually
-          reports on each machine, not assumed.
+        * Laptop: "NVIDIA RTX A2000 Laptop GPU", the string the loader
+          reports, because frame generation must run on the same GPU as the
+          application and the application is PRIME-offloaded to the dGPU
+          while the primary GPU is the Intel iGPU (design.txt SECTION 9).
+        * Upstream also accepts an uppercase vendor:device ID or a PCI bus
+          ID; whichever form is chosen must be taken from what the driver
+          actually reports, not assumed.
         Test: both home environments build; frame generation works with the
-        selector set explicitly on each machine; the mismatched case is
-        confirmed to be the failure it is predicted to be, documenting the
-        requirement by observation.
+        selector set on each machine; the unset case on the laptop
+        reproduces OB2, documenting the requirement by observation.
 :: PHASE 6. OUTPUT SPLIT
 ================================================================================
-    Goal: keep the Qt GUI out of closures that cannot run it, without
-    rebuilding the layer.
     - Step 6.1: Split the graphical interface into its own output.
         * Default output: layer, manifest, CLI.  Separate output: GUI and
           XDG files.
