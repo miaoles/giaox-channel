@@ -1,92 +1,124 @@
 ================================================================================
 GIAOX — LSFG-VK INTEGRATION ROADMAP
 ================================================================================
+
 OVERVIEW
     Seven phases move every lsfg-vk concern out of the home configuration
-    and into the component that owns it: the package owns the artifact, a
-    home service owns policy and configuration, the machine layer owns
-    hardware-specific values, and nonguix' Steam container owns sandbox
-    reachability.
+    and into the component that owns it: the package owns the artifact,
+    the machine layer owns hardware-specific values, nonguix' Steam
+    container owns sandbox reachability, and the generic provisioned-files
+    service owns every file that must exist at a path an application
+    hardcodes.
+
     The guiding rule is DEFAULT-UPSTREAM, OPT-IN GUIX: with no
     configuration beyond installing the package, lsfg-vk must behave
     exactly as its authors intend.  Every deviation that makes it more
     declarative, more inert, or more reproducible is opted into.
+
+    conf.toml is NOT one of those deviations.  It is a live, git-tracked,
+    GUI-edited artifact, reached from every namespace by a single inode.
+    Phase 3 — a home service owning its content — is retired; serialising
+    a file whose editor exists to own it was a fight the design should
+    never have picked.  See D9 and documents/provisioned-files.txt.
+
     Work proceeds per documents/conventions.txt in the giaox repository.
+
 OWNERSHIP
     PACKAGE   giaox-channel: giaox/packages/lsfg-vk.scm
         The layer, the CLI, the UI; the constants downstream consumes; the
         container transformer and the Steam constructor.  Making a Vulkan
-        layer reachable inside an FHS container is a property of the layer,
-        not of Steam — the reasoning by which nonguix puts steam-nvidia in
-        its nvidia module.  No site policy, no configuration-repository
-        paths, no machine-specific values, and no knowledge of any GPU
-        driver: the driver and its passthrough set are required positional
-        parameters with no defaults.
-    SERVICE   giaox-channel: giaox/services/lsfg-vk.scm
-        A HOME service; everything it does is per-user.  Beside the
-        channel's existing file-organizer home service.  Defaults
-        defensible for any user, not for this machine.  See D8 and D9.
+        layer reachable inside an FHS container is a property of the
+        layer, not of Steam — the reasoning by which nonguix puts
+        steam-nvidia in its nvidia module.  No site policy, no
+        configuration-repository paths, no machine-specific values, and no
+        knowledge of any GPU driver: the driver and its passthrough set
+        are required positional parameters with no defaults.
+
     MACHINES  giaox: machines/*/main.scm
         GPU identity, Steam variant, graphics driver, passthrough set.
+
     HOME      giaox: home/main.scm
-        One service instantiation carrying the maintainer's profiles and
-        the path to Lossless.dll.  Nothing else.
+        The package.  Three <provisioned-file> forms.  The machine-
+        dispatched path to this machine's conf.toml.  Nothing else.
+
+    NO SERVICE.  giaox/services/lsfg-vk.scm is retired (D8, D9); it
+    installed a package, and (packages …) installs packages.  Removal is
+    documents/provisioned-files.txt Phase 6.
+
 KEY INVARIANTS
-    I1  The layer manifest's library_path is an absolute store path, and it
-        resolves inside a nonguix container EXACTLY WHEN the package is a
-        member of that container: the launcher runs `guix shell --container
-        -m <manifest>', which mounts the closure of the container manifest,
-        not the whole store.  Membership and path validity are one fact.
-        Nothing may rewrite this path.
-        VERIFIED at runtime: the library is readable inside the container at
-        its store path, and the union's manifest output is in the closure.
+    I1  The layer manifest's library_path is an absolute store path, and
+        it resolves inside a nonguix container EXACTLY WHEN the package is
+        a member of that container: the launcher runs `guix shell
+        --container -m <manifest>', which mounts the closure of the
+        container manifest, not the whole store.  Membership and path
+        validity are one fact.  Nothing may rewrite this path.
+        VERIFIED at runtime: the library is readable inside the container
+        at its store path, and the union's manifest output is in the
+        closure.
+
     I2  The Vulkan loader finds the manifest inside the container through
         the FHS union's share/vulkan/implicit_layer.d, without any
         environment variable — the union's share is placed on the loader's
         default search path by fhs-internal when the container starts.
-        NOTE: with DEBUG=1 the launcher omits fhs-internal, so that shell is
-        PRE-FHS and /usr does not yet exist in it; DEBUG=1 cannot be used to
-        inspect /usr.  VERIFIED by the union's contents and by a Proton game
-        loading the layer.
-    I3  Environment variables are the ONLY thing that must cross the sandbox
-        boundary explicitly, via preserved-env.  The complete set lsfg-vk
-        2.0 reads is DISABLE_LSFGVK plus ten LSFGVK_* variables, so
-        "^DISABLE_LSFGVK$" and "^LSFGVK_" cover it exactly.  Any variable
-        this project introduces must fall under the LSFGVK_ prefix.
-        VERIFIED: the deployed launcher passes them; DISABLE_LSFGVK in a
-        game's launch options suppresses the layer.
-    I4  conf.toml is mutable state written by lsfg-vk-ui and by the layer.
-        The default configuration must never make it read-only.
+        NOTE: with DEBUG=1 the launcher omits fhs-internal, so that shell
+        is PRE-FHS and /usr does not yet exist in it; DEBUG=1 cannot be
+        used to inspect /usr.  VERIFIED by the union's contents and by a
+        Proton game loading the layer.
+
+    I3  Environment variables are the ONLY thing that must cross the
+        sandbox boundary explicitly, via preserved-env.  The complete set
+        lsfg-vk 2.0 reads is DISABLE_LSFGVK plus ten LSFGVK_* variables,
+        so "^DISABLE_LSFGVK$" and "^LSFGVK_" cover it exactly.  Any
+        variable this project introduces must fall under the LSFGVK_
+        prefix.  VERIFIED: the deployed launcher passes them;
+        DISABLE_LSFGVK in a game's launch options suppresses the layer.
+        UNCHANGED BY D9: nothing in the ruled design sets a path-valued
+        LSFGVK_ variable in the host session, so none crosses wrongly.
+
+    I4  conf.toml is mutable state, WRITTEN IN PLACE.  VERIFIED: four
+        observations across two lsfg-vk-ui saves and one
+        close-without-save left inode 39328272 unchanged, mtime moving
+        only on save; liblsfg-vk-layer.so exports no rename* and no
+        inotify_* undefined symbol.  Nothing in this system replaces
+        conf.toml by rename, nothing watches it, and nothing in this
+        design writes it.  This invariant is what licenses a hard link to
+        carry the file across the sandbox seam.
+
     I5  lsfg-vk is x86_64-only.  DECLARED but NOT ENFORCED:
         supported-systems governs the CLI, and a consumer passing #:system
         explicitly — nonguix' fhs-union does — never consults it.  Any
         32-bit consumer must be excluded by construction.  See I10.
+
     I6  The channel is consumed by `guix pull', so `guix build lsfg-vk'
         exercises the PULLED revision.  Verify unpushed changes with -L.
         COROLLARY: when a -L load fails, `guix shell' warns and silently
         falls back to the PULLED package.
+
     I7  The LAYER must resolve the Vulkan loader by bare soname; only the
         EXECUTABLES may be pointed at a specific one.  lsfg-vk-common
         dlopens "libvulkan.so.1" and is a STATIC library linked into all
         three targets, so any patch to that source reaches the layer.  For
         the layer the bare soname matches the loader already in the
-        application's process — inside the container, the FHS union's — and
-        two loader instances in one process is not a working setup.  For the
-        executables no loader is present and the soname resolves against
-        nothing, because ld-wrapper adds RUNPATH only for linked libraries.
-        The fix is therefore a linker flag scoped to executables, never a
-        source substitution.  VERIFIED by objdump.
+        application's process — inside the container, the FHS union's —
+        and two loader instances in one process is not a working setup.
+        For the executables no loader is present and the soname resolves
+        against nothing, because ld-wrapper adds RUNPATH only for linked
+        libraries.  The fix is therefore a linker flag scoped to
+        executables, never a source substitution.  VERIFIED by objdump.
+
     I8  A check must measure exactly what its label asserts and must not
         depend on anything unverified about the environment.  Lessons paid
         for so far:
           * patchelf is NOT installed; objdump, nm and strings are.
           * define*-public is NOT bound in this Guile/Guix context.
-          * vkcube prints its own "Selected GPU N:" line; it is not lsfg-vk
-            output and was once misread as such.
+          * vkcube prints its own "Selected GPU N:" line; it is not
+            lsfg-vk output and was once misread as such.
           * a container's bin/<name> is a SYMLINK to a separate
-            nonguix-container-wrapper store item; `find -type f' misses it.
+            nonguix-container-wrapper store item; `find -type f' misses
+            it.
           * ngc-union32/64 force DELAYED fields and recompute per call, so
-            two calls are never eq?; lower to derivations and compare names.
+            two calls are never eq?; lower to derivations and compare
+            names.
           * `guix build -n' does not print systems, so grepping it cannot
             distinguish i686 from x86_64, and its answer depends on what
             earlier checks already built.
@@ -96,184 +128,281 @@ KEY INVARIANTS
           * Steam's console-linux.txt is never written in this container —
             the launcher reports "Couldn't set up srt-logger".  Terminal
             output is the only log.
-    I9  A module in this channel may import ONLY what .guix-channel declares
-        as a dependency.  `guix pull' compiles the channel with just those
-        modules on the load path, and one uncompilable module fails the
-        whole channel derivation.  Neither -L nor `guix repl' reveals the
-        omission.  Every new cross-channel import requires a .guix-channel
-        change, verified by an actual pull.  VERIFIED across two guix
-        revisions.
+          * a `grep -oE 'LSFGVK_[A-Z_]+'' truncates LSFGVK_NO_FP16.
+            Character classes must admit digits.
+
+    I9  A module in this channel may import ONLY what .guix-channel
+        declares as a dependency.  `guix pull' compiles the channel with
+        just those modules on the load path, and one uncompilable module
+        fails the whole channel derivation.  Neither -L nor `guix repl'
+        reveals the omission.  Every new cross-channel import requires a
+        .guix-channel change, verified by an actual pull.  VERIFIED across
+        two guix revisions.
+
     I10 A nonguix container's union32 is a DELAYED field defaulting to a
         derivation of `packages'.  Appending to `packages' therefore adds
         the package to the 32-bit union too, which for lsfg-vk means an
-        i686 build and an i686 qtdeclarative — and that does not build (B2).
-        Any transformer adding a 64-bit-only package MUST pin union32 to the
-        value it had on the incoming container.  Heroic overrides union32
-        explicitly and Steam does not, which is why the derivation is easy
-        to miss.  VERIFIED by comparing lowered derivations: identical for
-        union32, different for union64.
-    I11 conf.toml is per-$HOME, and the container's $HOME IS the sandbox
-        home.  There are therefore necessarily TWO files — the host's for
-        lsfg-vk-ui, host-native clients and the CLI, and
-        $GUIX_SANDBOX_HOME/.config/lsfg-vk/conf.toml for everything under
-        Steam — and the host's is not visible inside the container, since
-        only the sandbox home is mapped to $HOME.  Neither is an orphan.
-        Observed: left to hand maintenance the two diverge, and did.
-        The goal is ONE SOURCE OF TRUTH, not one file.  See D9.
+        i686 build and an i686 qtdeclarative — and that does not build
+        (B2).  Any transformer adding a 64-bit-only package MUST pin
+        union32 to the value it had on the incoming container.  Heroic
+        overrides union32 explicitly and Steam does not, which is why the
+        derivation is easy to miss.  VERIFIED by comparing lowered
+        derivations: identical for union32, different for union64.
+
+    I11 ONE INODE, THREE NAMES.  The container bind-mounts the sandbox
+        home ONTO $HOME (`--share=$GUIX_SANDBOX_HOME=$HOME', verified in
+        the deployed wrapper).  There are therefore not two conf.toml
+        files; there is one inode bearing a name in each namespace:
+
+            ~/Development/giaox/configurations/lsfg-vk/<machine>/conf.toml
+                the authority — git-tracked, hand-edited, GUI-edited
+            ~/.config/lsfg-vk/conf.toml                  SYMLINK
+                because lsfg-vk-ui hardcodes $XDG_CONFIG_HOME
+            ~/Sandbox/.config/lsfg-vk/conf.toml          HARD LINK
+                because a container cannot follow a symlink out of its
+                namespace, and a store symlink there dangles (I1)
+
+        The goal was always ONE SOURCE OF TRUTH.  It turns out to be one
+        file.  Divergence is not prevented; it is made unrepresentable.
+
+    I12 THE METHOD FOLLOWS FROM THE ROOT, NOT FROM TASTE.  A symlink is
+        path-bound and survives the authority's inode being rewritten by
+        git; a hard link is inode-bound and cannot be followed out of a
+        namespace.  The host name must be a symlink; the sandbox name must
+        be a hard link.  Swapping them silently breaks one of the two.
+        See documents/provisioned-files.txt I6.
+
+    I13 A path that must be written into content read in two namespaces
+        must itself be NAMESPACE-INVARIANT: the same $HOME-relative name,
+        provisioned in both roots.  This is why Lossless.dll is bound at
+        .local/share/lsfg-vk/Lossless.dll in both, and why the `dll' key
+        is a constant rather than a per-file variable.  Fix the path,
+        never the content.
+
 TRACKED UPSTREAM ITEMS
     U1  nonguix: %nvidia-environment-variable-regexps is `define', not
-        `define-public', and nonguix' steam-nvidia variants apply it through
-        a private macro that discards the container record.  A one-line
-        #:export patch retires D5's @@.  ACTION: send the MR.
-    U2  CLOSED.  The `nix' test failure is no longer reachable: stock nix is
-        substitutable (ci.guix.gnu.org) and present in the store.  B1 and
-        (giaox packages nix) removed.
+        `define-public', and nonguix' steam-nvidia variants apply it
+        through a private macro that discards the container record.  A
+        one-line #:export patch retires D5's @@.  ACTION: send the MR.
+
+    U2  CLOSED.  The `nix' test failure is no longer reachable: stock nix
+        is substitutable (ci.guix.gnu.org) and present in the store.  B1
+        and (giaox packages nix) removed.
+
     U3  guix: i686 qtdeclarative does not build (B2).  Not needed by this
         design, which excludes Qt from the 32-bit union by construction.
+
     U4  Channel pinning: channels/channels.scm policy requires pinning the
         channel set AS A SET.  D7 made this channel's window the
-        intersection of its guix and nonguix windows.  When the set is next
-        pinned, giaox/nonguix/guix must be pinned together; probe with
-        `guix time-machine -C channels/channels.scm -- repl'.
+        intersection of its guix and nonguix windows.  When the set is
+        next pinned, giaox/nonguix/guix must be pinned together; probe
+        with `guix time-machine -C channels/channels.scm -- repl'.
+
 DECISIONS
     D1  Activation policies: upstream implicit (default) plus opt-in gated
-        and explicit variants, selected by the service.
-    D2  conf.toml ownership defaults to upstream's workflow — the service
-        writes nothing; seed and declarative modes are opt-in escalations.
-    D3  The home configuration gains machine dispatch (Phase 5).
+        and explicit variants, selected in the home configuration.
+
+    D2  SUPERSEDED BY D9.  conf.toml ownership was to default to
+        upstream's workflow, with seed and declarative modes as opt-in
+        escalations.  There are no modes: the file is a live artifact and
+        the service that carries it never reads a byte of it.
+
+    D3  The home configuration gains machine dispatch (Phase 5).  Now
+        LOAD-BEARING: OB2 makes the per-profile `gpu' key mandatory on the
+        laptop, so conf.toml is machine-specific and its path is selected
+        by dispatch.
+
     D4  The GUI is split into its own output (Phase 6).
-    D5  nonguix' %nvidia-environment-variable-regexps is read with @@ rather
-        than reconstructed: a hand-copied list degrades SILENTLY when
-        nonguix adds a variable, whereas @@ fails LOUDLY if the binding
-        moves, and loud channel-churn failures are a managed quantity here.
-        Precedent exists in Guix proper (gnu/packages/gnuzilla.scm) and in
-        nonguix' own nvidia module.  The expression lives in the LAPTOP'S
-        MACHINE FILE, because NVIDIA is a machine concern.  See U1.
-        VERIFIED to work inside a `load'ed machine file.
+
+    D5  nonguix' %nvidia-environment-variable-regexps is read with @@
+        rather than reconstructed: a hand-copied list degrades SILENTLY
+        when nonguix adds a variable, whereas @@ fails LOUDLY if the
+        binding moves, and loud channel-churn failures are a managed
+        quantity here.  Precedent exists in Guix proper
+        (gnu/packages/gnuzilla.scm) and in nonguix' own nvidia module.
+        The expression lives in the LAPTOP'S MACHINE FILE, because NVIDIA
+        is a machine concern.  See U1.  VERIFIED to work inside a `load'ed
+        machine file.
+
     D6  Module layout follows Guix: packages and services in separate
-        modules.  Container transformer and Steam constructor belong to the
-        package module (nonguix precedent).  The service is a home service
-        at giaox/services/lsfg-vk.scm.
+        modules.  Container transformer and Steam constructor belong to
+        the package module (nonguix precedent).  This project contributes
+        no service.
+
     D7  nonguix is a declared .guix-channel dependency (I9), with an
-        introduction so it is authenticated in the dependency position too.
-        Rejected: moving the container code to the configuration repository
-        (splits the design, demotes library code to glue); deferring the
-        import to runtime via resolve-interface (hides a real dependency).
-        Accepted cost recorded as U4.
-    D8  Home and system service types cannot be unified — the two service
-        graphs are disjoint, and upstream always writes two types.  The
-        records, the TOML serializer (a plain procedure) and the
-        policy/package selection are therefore shared module-level
-        definitions; only the HOME type is built.  A system type writing
-        /etc/lsfg-vk/conf.toml becomes an addition, never a refactor.
-    D9  PROPOSED, awaiting ruling.  The sandbox configuration has no
-        precedent to follow: nothing in nonguix writes into the sandbox
-        home, which is treated as opaque user state.  It also cannot simply
-        be dropped — the sandbox file is the only configuration Steam's
-        layer can read (I11).  Options:
-          (a) TWO FILES, ONE RECORD.  The service serializes the same
-              configuration to both paths, emitting the single
-              namespace-dependent key — dll — correctly per target: the
-              absolute sandbox path for the host, omitted for the container
-              where the default search already finds it.  RECOMMENDED:
-              preserves upstream's GUI and profile workflow in both
-              namespaces, needs no escape hatch, and prevents the
-              divergence already observed.
-          (b) ONE FILE shared into the container via
-              GUIX_SANDBOX_EXTRA_SHARES plus a host ~/.local/share/Steam
-              symlink so dll can be omitted everywhere.  REJECTED: two new
-              mechanisms, one an escape hatch the design must not require,
-              and a host symlink that misleads other tools.
-          (c) NO sandbox file: LSFGVK_ENV=1 with LSFGVK_* per game in Steam
-              launch options.  Legitimate and Steam-idiomatic, but disables
-              the config file and profiles, making the UI and active_in dead
-              weight under Steam.  Retained as a documented per-game
-              override, not as the mechanism.
+        introduction so it is authenticated in the dependency position
+        too.  Rejected: moving the container code to the configuration
+        repository (splits the design, demotes library code to glue);
+        deferring the import to runtime via resolve-interface (hides a
+        real dependency).  Accepted cost recorded as U4.
+
+    D8  VOID.  Home and system service types were to share records, a TOML
+        serializer, and policy selection.  There is no service, no record
+        and no serializer.  Should /etc/lsfg-vk/conf.toml ever be wanted,
+        it is one more <provisioned-file> in a system-side analogue, not a
+        refactor of anything here.
+
+    D9  RULED: (g) ONE INODE, THREE NAMES.  conf.toml lives in the
+        configuration repository; home/main.scm provisions a path-bound
+        symlink at the host's hardcoded path and an inode-bound hard link
+        inside the sandbox; Lossless.dll is provisioned at a
+        namespace-invariant relative name so that the `dll' key is a
+        constant.  Nothing is serialized, nothing is transformed, nothing
+        is watched, no daemon runs, and the GUI keeps every one of its
+        powers.  See documents/provisioned-files.txt.
+
+        Rejected, with cause:
+          (a) TWO FILES, ONE RECORD.  Does not prevent the divergence it
+              claims to: under seed the GUI edits one of them, which is
+              exactly the history; under declarative it prevents
+              divergence only by demoting the GUI to a viewer.
+          (b) ONE FILE via GUIX_SANDBOX_EXTRA_SHARES plus a host symlink.
+              Two new mechanisms, one of them an escape hatch, and a host
+              symlink that misleads other tools.  Unnecessary.
+          (c) NO sandbox file; LSFGVK_ENV=1 with per-game LSFGVK_*.
+              Retained as a documented per-game override, never as the
+              mechanism: it disables the config file and profiles, making
+              the UI and active_in dead weight under Steam.
+          (d) Namespace-invariant dll plus two duplicated conf.toml files.
+              Correct, and strictly more machinery than (g), which keeps
+              the namespace-invariant dll and deletes the duplication.
+          (e) Redirect the host's tools with LSFGVK_CONFIG.  FALSIFIED:
+              lsfg-vk-cli and lsfg-vk-ui contain no "LSFGVK_" string at
+              all; only the layer reads them.  It would also have required
+              replacing "^LSFGVK_" with nine enumerated regexps, which
+              degrades silently the next time upstream adds a variable —
+              the exact failure D5 exists to prevent.
+          (f) Hard-link the host name too.  A hard link is inode-bound, so
+              after git rewrites the authority's inode the GUI would keep
+              editing the old one while `git status' showed the new.
+              Silent divergence.  See I12.
+
 ACCEPTED LIMITATIONS
     L1  A 32-bit Vulkan client inside the container reads the 64-bit
         manifest from the shared /usr/share, fails to load the library and
         skips the layer, logging a loader error.  Upstream's situation on
-        every distribution, since upstream does not architecture-suffix its
-        manifest the way nvidia_layers and MangoHud do.  union32 is not a
-        remedy (I5, I10).
+        every distribution, since upstream does not architecture-suffix
+        its manifest the way nvidia_layers and MangoHud do.  union32 is
+        not a remedy (I5, I10).
+
     L2  On the laptop, machine-system-transform is replace-mesa, which
         grafts mesa to nvda throughout the system closure — including
-        lsfg-vk, which pulls mesa through qtbase.  The graft rewrites store
-        references inside files, so the manifest's library_path follows the
-        grafted output.  The system and home profiles therefore hold
-        different lsfg-vk store paths; benign, because only the container's
-        manifest is visible inside the container and only the home
-        profile's on the host.  Corollary for verification: the laptop's
-        system closure contains NEITHER ungrafted steam derivation, so any
-        identity check must compare against (replace-mesa …).
+        lsfg-vk, which pulls mesa through qtbase.  The graft rewrites
+        store references inside files, so the manifest's library_path
+        follows the grafted output.  The system and home profiles
+        therefore hold different lsfg-vk store paths; benign, because only
+        the container's manifest is visible inside the container and only
+        the home profile's on the host.  Corollary for verification: the
+        laptop's system closure contains NEITHER ungrafted steam
+        derivation, so any identity check must compare against
+        (replace-mesa …).
+
+    L3  The sandbox hard link is inode-bound.  `git checkout', `git pull'
+        and `git stash' rewriting the tracked conf.toml detach it until
+        the next `guix home reconfigure', which re-links.  The host
+        symlink is path-bound and is unaffected (I12).
+
+    L4  conf.toml's content is not in the store.  Two machines on one home
+        generation hold different bytes, by design (provisioned-files I7).
+
+    L5  conf.toml is machine-specific, because OB2 makes the `gpu' key
+        mandatory on the laptop and the two machines have different GPUs.
+        Its path is therefore machine-dispatched (D3, Phase 5).
+
 EXTERNAL BLOCKERS
     B1  RETIRED.  See U2.
+
     B2  i686 qtdeclarative does not build — QmltcTests fail to compile
         during the build phase.  Only reachable by pulling a Qt-dependent
         package into a 32-bit FHS union, which I10 forbids.
+
 DISCOVERY RESULTS
     Upstream surface
         * Layer identifier: VK_LAYER_LSFGVK_frame_generation.
         * Upstream's manifest carries disable_environment =
-          { DISABLE_LSFGVK: "1" }.  2.0 has no enable variable; inertness is
-          a property of profile matching.
-        * Variables, from the built binaries: DISABLE_LSFGVK, LSFGVK_CONFIG,
-          LSFGVK_DLL_PATH, LSFGVK_ENV, LSFGVK_FLOW_SCALE, LSFGVK_GPU,
-          LSFGVK_MULTIPLIER, LSFGVK_NO_FP16, LSFGVK_PACING,
+          { DISABLE_LSFGVK: "1" }.  2.0 has no enable variable; inertness
+          is a property of profile matching.
+        * Variables, from the built binaries: DISABLE_LSFGVK,
+          LSFGVK_CONFIG, LSFGVK_DLL_PATH, LSFGVK_ENV, LSFGVK_FLOW_SCALE,
+          LSFGVK_GPU, LSFGVK_MULTIPLIER, LSFGVK_NO_FP16, LSFGVK_PACING,
           LSFGVK_PERFORMANCE_MODE, LSFGVK_PROFILE.  No LSFG_* strays.
+          ALL ELEVEN LIVE IN THE LAYER ALONE: lsfg-vk-cli and lsfg-vk-ui
+          contain no "LSFGVK_" string whatsoever.  The UI cannot be
+          redirected; it finds conf.toml through XDG and nothing else.
+        * The layer exports no inotify_* and no rename* undefined symbol:
+          it does not watch conf.toml and does not replace it.
+        * lsfg-vk-ui writes conf.toml IN PLACE.  Inode 39328272 survived
+          two saves and one close-without-save (I4).
         * CMake defaults: VK_LAYER on, CLI on, UI off, XDG files off,
           DEVELOP off.  LSFGVK_LAYER_LIBRARY_PATH is a CACHE variable;
-          CMAKE_SKIP_RPATH is forced ON by a plain set() and is NOT settable
-          from the command line.
+          CMAKE_SKIP_RPATH is forced ON by a plain set() and is NOT
+          settable from the command line.
         * vkNegotiateLoaderLayerInterfaceVersion is annotated
           visibility("default"), overriding the target's hidden preset, so
           no patch is needed to export it.
-        * lsfg-vk-common is a STATIC library linked into all three targets;
-          src/vulkan/vulkan.cpp dlopens "libvulkan.so.1".  See I7.
+        * lsfg-vk-common is a STATIC library linked into all three
+          targets; src/vulkan/vulkan.cpp dlopens "libvulkan.so.1".  I7.
         * Licence: SPDX GPL-3.0-or-later throughout.
-        * No Khronos headers vendored; vulkan-headers is a required
-          build-time input that never becomes a runtime reference.
+        * No Khronos headers vendored; vulkan-headers is a build-time
+          input that never becomes a runtime reference.
         * conf.toml: version = 2; [global] dll, allow_fp16; repeated
           [[profile]] name, active_in (string OR array), gpu, multiplier,
-          flow_scale, performance_mode, pacing.  Single-quoted literals.
+          flow_scale, performance_mode, pacing.  Upstream writes
+          single-quoted literals; lsfg-vk-ui rewrites the file with
+          double-quoted literals and sorted keys, dropping comments.
         * The binaries also reference /etc/lsfg-vk/conf.toml.  See D8.
-        * Profile identification under Proton reports "(identified via wine
-          executable)"; native matches report "(identified via
+        * Profile identification under Proton reports "(identified via
+          wine executable)"; native matches report "(identified via
           executable)".
+
     Container surface
         * Record <nonguix-container>; accessors are ngc-* and ALL PUBLIC,
-          including ngc-packages, ngc-preserved-env, ngc-union32/64.
+          including ngc-packages, ngc-preserved-env, ngc-union32/64,
+          ngc-sandbox-home.
         * union32 and union64 are DELAYED fields defaulting to derivations
           of `packages'; this-nonguix-container exists privately, the tell.
         * (steam-container-for mesa) yields preserved-env '() and 52
-          packages; the base and debug regexps in the launcher are appended
-          by the builder, not held in the field.
+          packages; the base and debug regexps in the launcher are
+          appended by the builder, not held in the field.
         * bin/<name> is a SYMLINK to a separate nonguix-container-wrapper
           store item.
-        * The launcher honours GUIX_SANDBOX_HOME; DEBUG=1 starts a PRE-FHS
-          shell (I2).
-        * GUIX_SANDBOX_EXTRA_SHARES is a colon-separated escape hatch the
-          design must not require (I11, D9).
+        * THE SEAM: the launcher runs
+              guix shell --container --no-cwd --network --writable-root \
+                  --preserve=… --expose=… --share=… -m <manifest>
+          and among the shares is, literally,
+              (string-append sandbox-home "=" home)
+          i.e. --share=$GUIX_SANDBOX_HOME=$HOME.  The sandbox home is bind
+          mounted ONTO $HOME.  nonguix/multiarch-container.scm:362.
+        * sandbox-home = $GUIX_SANDBOX_HOME, else $HOME/<ngc-sandbox-home>,
+          whose default is ".local/share/guix-sandbox-home".
+        * The launcher honours DEBUG=1 with a PRE-FHS shell (I2), and
+          GUIX_SANDBOX_EXTRA_SHARES, a colon-separated list appended as
+          WRITABLE shares.  The design requires neither.
         * .guix-channel dependency metadata accepts (introduction
           (channel-introduction (version 0) (commit …) (signer …))).
+
     Environment
         * Lossless.dll at $GUIX_SANDBOX_HOME/.local/share/Steam/steamapps/
-          common/Lossless Scaling/ — the container's default search
-          location, so in-sandbox operation needs no dll configuration; on
-          the host it is unreachable by default, the sole reason the service
-          needs a dll-path field.
+          common/Lossless Scaling/Lossless.dll — 7 521 280 bytes, links=1.
+          It is the container's default search location, so in-sandbox
+          operation needs no dll configuration; on the host it is
+          unreachable by default, and its path is namespace-invalid inside
+          the container.  Hence I13.
+        * $HOME, $HOME/Sandbox and Lossless.dll all report dev=64768.
+          Every hard link this design makes is within one filesystem.
         * Devices on the laptop, as the loader reports them:
           "Intel(R) Iris(R) Xe Graphics (ADL GT2)" (integrated),
           "NVIDIA RTX A2000 Laptop GPU" (discrete).
+
     Closed items
         * O1 CLOSED: etc/ld.so.cache is gnu-build-system's standard
           make-dynamic-linker-cache output (375 entries).  Not cruft; also
           inert — it lacks libvulkan.so.1 and no /etc/ld.so.cache exists.
         * O2 CLOSED by mutation: a stale hand-installed manifest under
-          ~/.local/share/vulkan/implicit_layer.d pinned a superseded output
-          and gated on LSFG_VK; since the loader searches $XDG_DATA_HOME
-          unconditionally it polluted even --pure shells, and was in fact
-          the only manifest those shells saw.
+          ~/.local/share/vulkan/implicit_layer.d pinned a superseded
+          output and gated on LSFG_VK; since the loader searches
+          $XDG_DATA_HOME unconditionally it polluted even --pure shells,
+          and was in fact the only manifest those shells saw.
         * OB1 ACCEPTED as upstream behaviour: with no matching profile the
           layer declines negotiation, the loader fails to find
           vkGetInstanceProcAddr, logs two ERRORs and SKIPS the layer.
@@ -284,116 +413,121 @@ DISCOVERY RESULTS
           -1000072003 (VK_ERROR_INVALID_EXTERNAL_HANDLE); dGPU app with
           LSFGVK_GPU='NVIDIA RTX A2000 Laptop GPU' exits 0.  Any
           PRIME-offloaded application MUST have the gpu key or LSFGVK_GPU
-          set — including every Steam game on the laptop (I11).
+          set — including every Steam game on the laptop.  This is what
+          makes conf.toml machine-specific (L5).
+        * OB3 CLOSED by observation: the deployed host and sandbox
+          conf.toml had diverged completely — the host rewritten by the
+          GUI, the sandbox still upstream's commented default.  Left to
+          hand maintenance the two diverge, and did.  D9 makes the state
+          unrepresentable.
+
 :: PHASE 1. PACKAGE — UPSTREAM-FAITHFUL BASELINE
 ================================================================================
     Steps 1.1 (audit), 1.2 (reduction plus the executables-only loader
     RUNPATH) and 1.3 (host behaviour and inertness) verified.
 COMPLETION ✓
+
 :: PHASE 2. STEAM SANDBOX INTEGRATION
 ================================================================================
     - Step 2.1: Audit.  Complete.
     - Step 2.2: Container transformer and Steam constructor.  Complete.
         Verified: the constructed package evaluates and builds; lsfg-vk in
         its closure exactly once; union32 pinned (lowered derivations
-        identical) and union64 changed; the union64 manifest's library_path
-        resolves and is in the container closure; the launcher carries the
-        lsfg-vk regexps; the NVIDIA variant evaluates with the @@ read; all
-        of it through an actual pull at two guix revisions.
+        identical) and union64 changed; the union64 manifest's
+        library_path resolves and is in the container closure; the
+        launcher carries the lsfg-vk regexps; the NVIDIA variant evaluates
+        with the @@ read; all of it through an actual pull at two guix
+        revisions.
     - Step 2.3: Adopt the constructor per machine.  Complete.
         Desktop: mesa, empty passthrough set.  Laptop: the unversioned
         `nvda' alias — preserving the lockstep steam-nvidia had with
         nvidia-module-open — with nonguix' passthrough set read per D5 in
         the machine file.
         Verified: both machines evaluate; the deployed union64 carries the
-        manifest beside nvidia_layers; and end to end, a Proton game logged
+        manifest beside nvidia_layers; and end to end, a Proton game
+        logged
           lsfg-vk: using profile with name '2x FG / 100%'
                    (identified via wine executable)
         with the gpu key set, and logged nothing with DISABLE_LSFGVK=1.
     - Step 2.4: Remove the superseded staging machinery.  Complete.
         The activation service and its now-unused import are gone from
         home/main.scm; the staged layer and manifest are gone from the
-        sandbox home; the sandbox conf.toml was deliberately kept (I11);
-        home builds; no reference remains outside scratch transcripts.
+        sandbox home; the sandbox conf.toml was deliberately kept; home
+        builds; no reference remains outside scratch transcripts.
 COMPLETION ✓
-:: PHASE 3. HOME SERVICE
+
+:: PHASE 3. HOME SERVICE — RETIRED
 ================================================================================
-    - Step 3.1: Introduce the service with an inert default.  Applied.
-        giaox/services/lsfg-vk.scm defines <lsfg-vk-configuration> — named
-        without a home- prefix so the system type can share it (D8) — and
-        home-lsfg-vk-service-type, which extends only
-        home-profile-service-type.  home/main.scm instantiates it and drops
-        the bare "lsfg-vk" package entry.
-        Test: home builds; the package is present exactly once; the
-        activation script creates nothing; Phase 2's verification still
-        passes.
-    - Step 3.2: Add declarative configuration content, seeded.
-        * The record mirrors upstream's option set one-for-one, serializing
-          to upstream's exact keys and quoting style; active_in accepts both
-          of upstream's forms.
-        * Records, serializer and policy selection are shared definitions
-          (D8); the serializer is a plain procedure from configuration to
-          file-like.
-        * Targets follow D9 once ruled.
-        * Mode selector: upstream default (writes nothing), seed (written
-          only if absent, left writable), declarative.  Default stays
-          upstream (D2, I4).
-        * Lossless.dll path is a field with no repository-specific default.
-        Test: mode unset creates nothing; seed with no existing file
-        appears, validates and remains UI-writable; seed with an existing
-        file leaves it untouched byte-for-byte; a host client and a Steam
-        game both activate against it.
-    - Step 3.3: Add fully declarative mode.
-        Managed content; the UI becomes a read-only viewer, the accepted
-        cost.  Both modes serialize identically.
-        Test: the file matches the record and validates; the UI cannot save
-        over it; reverting to seed restores writability.
-COMPLETION ☐
+    Step 3.1 was applied: giaox/services/lsfg-vk.scm defined
+    <lsfg-vk-configuration> and home-lsfg-vk-service-type, extending only
+    home-profile-service-type; home/main.scm instantiated it.
+
+    Steps 3.2 and 3.3 — declarative configuration content, a TOML
+    serializer, seed and declarative modes — are CANCELLED by D9.  The
+    file is a live artifact; the mechanism that carries it reads none of
+    its bytes.  What remained of the service was a package installation.
+
+    The module and its instantiation are removed in
+    documents/provisioned-files.txt Phase 6.  Until then the service
+    stands, inert and harmless.
+COMPLETION — RETIRED
+
 :: PHASE 4. OPT-IN ACTIVATION POLICIES
 ================================================================================
-    OB1 motivates this phase: the gated and explicit policies are what stop
-    an idle layer from making every Vulkan client log loader errors.
+    OB1 motivates this phase: the gated and explicit policies are what
+    stop an idle layer from making every Vulkan client log loader errors.
+
     - Step 4.1: A package-side variant constructor — upstream implicit
       (default, unchanged), gated implicit, explicit.  The gate variable
-      must fall under the LSFGVK_ prefix (I3) and must not collide with the
-      eleven variables upstream reads.  The explicit policy's cost —
-      automatic profile matching and the UI's active_in list become inert —
-      is to be stated where it is defined.  One shared build.
-    - Step 4.2: A policy field on the service, defaulting to upstream
-      implicit; for a non-default policy the service makes the variable
-      reach both the host session and the sandbox, which the transformer's
-      regexp set already covers by construction.
+      must fall under the LSFGVK_ prefix (I3) and must not collide with
+      the eleven variables upstream reads.  It must NOT be path-valued:
+      only namespace-free values may cross the seam.  The explicit
+      policy's cost — automatic profile matching and the UI's active_in
+      list become inert — is to be stated where it is defined.  One shared
+      build.
+
+    - Step 4.2: home/main.scm selects the variant and, for a non-default
+      policy, exports the gate variable in the home session.  It reaches
+      the sandbox because the transformer's regexp set already covers it
+      by construction (I3).
+
 :: PHASE 5. MACHINE DISPATCH IN THE HOME CONFIGURATION
 ================================================================================
-    OB2 makes this load-bearing: without the selector, any application
-    offloaded to the dGPU hangs.
+    OB2 makes this load-bearing twice over: without the selector, any
+    application offloaded to the dGPU hangs; and the selector lives in
+    conf.toml, which therefore cannot be one file across two machines (L5).
+
     - Step 5.1: Machine dispatch in the home configuration, mirroring the
       system configuration's mechanism, carrying per-machine home values
       generally.
-    - Step 5.2: The GPU selector per machine.  The laptop's value is proven:
-      "NVIDIA RTX A2000 Laptop GPU".  The desktop's is to be read from the
-      loader, not assumed.
+    - Step 5.2: The per-machine conf.toml.  The laptop's gpu value is
+      proven: "NVIDIA RTX A2000 Laptop GPU".  The desktop's is to be read
+      from the loader, not assumed.  The dispatched path is what
+      documents/provisioned-files.txt Phase 5.2 provisions.
+
 :: PHASE 6. OUTPUT SPLIT
 ================================================================================
-    - Step 6.1: Default output = layer, manifest, CLI; separate output = GUI
-      and XDG files.  Must not change any path the manifest or XDG files
-      reference, and must preserve the executables' loader RUNPATH (I7).
-      Migrate the package module's remaining multi-line comment blocks into
-      this document at the same time (conventions.txt SECTION 5).
-    - Step 6.2: The container transformer takes only the layer output; the
-      service installs the GUI output when wanted, defaulting to installing
-      it.
+    - Step 6.1: Default output = layer, manifest, CLI; separate output =
+      GUI and XDG files.  Must not change any path the manifest or XDG
+      files reference, and must preserve the executables' loader RUNPATH
+      (I7).  Migrate the package module's remaining multi-line comment
+      blocks into this document at the same time (conventions.txt
+      SECTION 5).
+    - Step 6.2: The container transformer takes only the layer output;
+      home/main.scm installs the GUI output, defaulting to installing it.
+
 :: PHASE 7. VERIFICATION AND DOCUMENTATION
 ================================================================================
     - Step 7.1: End-to-end audit across host client, Steam game, CLI
       validate, CLI benchmark, GUI round-trip, DISABLE_LSFGVK suppression,
       per-game profile selection, and each activation policy.  Resolve or
-      formally accept B2, L1, L2, OB1, OB2, U1, U3, U4.
+      formally accept B2, L1–L5, OB1, OB2, U1, U3, U4.
     - Step 7.2: Record the design in the configuration repository's design
       document: ownership split, invariants, activation policies and their
-      costs, conf.toml mutability and the two-namespace fact (I11), and the
+      costs, and the one-inode rule (I11, I12, I13) with the
       hybrid-graphics GPU requirement.
 COMPLETION ☐
+
 ================================================================================
 END OF LSFG-VK INTEGRATION ROADMAP
 ================================================================================

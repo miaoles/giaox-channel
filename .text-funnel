@@ -1,0 +1,5 @@
+exclude=*scratch*
+extensions=scm,sh,bash,nix,pm,conf,ini,xml,txt
+output=scratch/
+recursive=true
+verbose=true

@@ -1,0 +1,2051 @@
+giaox-channel/documents/lsfg-vk.txt
+```txt
+================================================================================
+GIAOX — LSFG-VK INTEGRATION ROADMAP
+================================================================================
+OVERVIEW
+    Seven phases move every lsfg-vk concern out of the home configuration
+    and into the component that owns it: the package owns the artifact, a
+    home service owns policy and configuration, the machine layer owns
+    hardware-specific values, and nonguix' Steam container owns sandbox
+    reachability.
+    The guiding rule is DEFAULT-UPSTREAM, OPT-IN GUIX: with no
+    configuration beyond installing the package, lsfg-vk must behave
+    exactly as its authors intend.  Every deviation that makes it more
+    declarative, more inert, or more reproducible is opted into.
+    Work proceeds per documents/conventions.txt in the giaox repository.
+OWNERSHIP
+    PACKAGE   giaox-channel: giaox/packages/lsfg-vk.scm
+        The layer, the CLI, the UI; the constants downstream consumes; the
+        container transformer and the Steam constructor.  Making a Vulkan
+        layer reachable inside an FHS container is a property of the layer,
+        not of Steam — the reasoning by which nonguix puts steam-nvidia in
+        its nvidia module.  No site policy, no configuration-repository
+        paths, no machine-specific values, and no knowledge of any GPU
+        driver: the driver and its passthrough set are required positional
+        parameters with no defaults.
+    SERVICE   giaox-channel: giaox/services/lsfg-vk.scm
+        A HOME service; everything it does is per-user.  Beside the
+        channel's existing file-organizer home service.  Defaults
+        defensible for any user, not for this machine.  See D8 and D9.
+    MACHINES  giaox: machines/*/main.scm
+        GPU identity, Steam variant, graphics driver, passthrough set.
+    HOME      giaox: home/main.scm
+        One service instantiation carrying the maintainer's profiles and
+        the path to Lossless.dll.  Nothing else.
+KEY INVARIANTS
+    I1  The layer manifest's library_path is an absolute store path, and it
+        resolves inside a nonguix container EXACTLY WHEN the package is a
+        member of that container: the launcher runs `guix shell --container
+        -m <manifest>', which mounts the closure of the container manifest,
+        not the whole store.  Membership and path validity are one fact.
+        Nothing may rewrite this path.
+        VERIFIED at runtime: the library is readable inside the container at
+        its store path, and the union's manifest output is in the closure.
+    I2  The Vulkan loader finds the manifest inside the container through
+        the FHS union's share/vulkan/implicit_layer.d, without any
+        environment variable — the union's share is placed on the loader's
+        default search path by fhs-internal when the container starts.
+        NOTE: with DEBUG=1 the launcher omits fhs-internal, so that shell is
+        PRE-FHS and /usr does not yet exist in it; DEBUG=1 cannot be used to
+        inspect /usr.  VERIFIED by the union's contents and by a Proton game
+        loading the layer.
+    I3  Environment variables are the ONLY thing that must cross the sandbox
+        boundary explicitly, via preserved-env.  The complete set lsfg-vk
+        2.0 reads is DISABLE_LSFGVK plus ten LSFGVK_* variables, so
+        "^DISABLE_LSFGVK$" and "^LSFGVK_" cover it exactly.  Any variable
+        this project introduces must fall under the LSFGVK_ prefix.
+        VERIFIED: the deployed launcher passes them; DISABLE_LSFGVK in a
+        game's launch options suppresses the layer.
+    I4  conf.toml is mutable state written by lsfg-vk-ui and by the layer.
+        The default configuration must never make it read-only.
+    I5  lsfg-vk is x86_64-only.  DECLARED but NOT ENFORCED:
+        supported-systems governs the CLI, and a consumer passing #:system
+        explicitly — nonguix' fhs-union does — never consults it.  Any
+        32-bit consumer must be excluded by construction.  See I10.
+    I6  The channel is consumed by `guix pull', so `guix build lsfg-vk'
+        exercises the PULLED revision.  Verify unpushed changes with -L.
+        COROLLARY: when a -L load fails, `guix shell' warns and silently
+        falls back to the PULLED package.
+    I7  The LAYER must resolve the Vulkan loader by bare soname; only the
+        EXECUTABLES may be pointed at a specific one.  lsfg-vk-common
+        dlopens "libvulkan.so.1" and is a STATIC library linked into all
+        three targets, so any patch to that source reaches the layer.  For
+        the layer the bare soname matches the loader already in the
+        application's process — inside the container, the FHS union's — and
+        two loader instances in one process is not a working setup.  For the
+        executables no loader is present and the soname resolves against
+        nothing, because ld-wrapper adds RUNPATH only for linked libraries.
+        The fix is therefore a linker flag scoped to executables, never a
+        source substitution.  VERIFIED by objdump.
+    I8  A check must measure exactly what its label asserts and must not
+        depend on anything unverified about the environment.  Lessons paid
+        for so far:
+          * patchelf is NOT installed; objdump, nm and strings are.
+          * define*-public is NOT bound in this Guile/Guix context.
+          * vkcube prints its own "Selected GPU N:" line; it is not lsfg-vk
+            output and was once misread as such.
+          * a container's bin/<name> is a SYMLINK to a separate
+            nonguix-container-wrapper store item; `find -type f' misses it.
+          * ngc-union32/64 force DELAYED fields and recompute per call, so
+            two calls are never eq?; lower to derivations and compare names.
+          * `guix build -n' does not print systems, so grepping it cannot
+            distinguish i686 from x86_64, and its answer depends on what
+            earlier checks already built.
+          * DEBUG=1 gives a PRE-FHS container shell (I2).
+          * a grafted system closure does not contain the ungrafted
+            derivation; compare against the transformed package (L2).
+          * Steam's console-linux.txt is never written in this container —
+            the launcher reports "Couldn't set up srt-logger".  Terminal
+            output is the only log.
+    I9  A module in this channel may import ONLY what .guix-channel declares
+        as a dependency.  `guix pull' compiles the channel with just those
+        modules on the load path, and one uncompilable module fails the
+        whole channel derivation.  Neither -L nor `guix repl' reveals the
+        omission.  Every new cross-channel import requires a .guix-channel
+        change, verified by an actual pull.  VERIFIED across two guix
+        revisions.
+    I10 A nonguix container's union32 is a DELAYED field defaulting to a
+        derivation of `packages'.  Appending to `packages' therefore adds
+        the package to the 32-bit union too, which for lsfg-vk means an
+        i686 build and an i686 qtdeclarative — and that does not build (B2).
+        Any transformer adding a 64-bit-only package MUST pin union32 to the
+        value it had on the incoming container.  Heroic overrides union32
+        explicitly and Steam does not, which is why the derivation is easy
+        to miss.  VERIFIED by comparing lowered derivations: identical for
+        union32, different for union64.
+    I11 conf.toml is per-$HOME, and the container's $HOME IS the sandbox
+        home.  There are therefore necessarily TWO files — the host's for
+        lsfg-vk-ui, host-native clients and the CLI, and
+        $GUIX_SANDBOX_HOME/.config/lsfg-vk/conf.toml for everything under
+        Steam — and the host's is not visible inside the container, since
+        only the sandbox home is mapped to $HOME.  Neither is an orphan.
+        Observed: left to hand maintenance the two diverge, and did.
+        The goal is ONE SOURCE OF TRUTH, not one file.  See D9.
+TRACKED UPSTREAM ITEMS
+    U1  nonguix: %nvidia-environment-variable-regexps is `define', not
+        `define-public', and nonguix' steam-nvidia variants apply it through
+        a private macro that discards the container record.  A one-line
+        #:export patch retires D5's @@.  ACTION: send the MR.
+    U2  CLOSED.  The `nix' test failure is no longer reachable: stock nix is
+        substitutable (ci.guix.gnu.org) and present in the store.  B1 and
+        (giaox packages nix) removed.
+    U3  guix: i686 qtdeclarative does not build (B2).  Not needed by this
+        design, which excludes Qt from the 32-bit union by construction.
+    U4  Channel pinning: channels/channels.scm policy requires pinning the
+        channel set AS A SET.  D7 made this channel's window the
+        intersection of its guix and nonguix windows.  When the set is next
+        pinned, giaox/nonguix/guix must be pinned together; probe with
+        `guix time-machine -C channels/channels.scm -- repl'.
+DECISIONS
+    D1  Activation policies: upstream implicit (default) plus opt-in gated
+        and explicit variants, selected by the service.
+    D2  conf.toml ownership defaults to upstream's workflow — the service
+        writes nothing; seed and declarative modes are opt-in escalations.
+    D3  The home configuration gains machine dispatch (Phase 5).
+    D4  The GUI is split into its own output (Phase 6).
+    D5  nonguix' %nvidia-environment-variable-regexps is read with @@ rather
+        than reconstructed: a hand-copied list degrades SILENTLY when
+        nonguix adds a variable, whereas @@ fails LOUDLY if the binding
+        moves, and loud channel-churn failures are a managed quantity here.
+        Precedent exists in Guix proper (gnu/packages/gnuzilla.scm) and in
+        nonguix' own nvidia module.  The expression lives in the LAPTOP'S
+        MACHINE FILE, because NVIDIA is a machine concern.  See U1.
+        VERIFIED to work inside a `load'ed machine file.
+    D6  Module layout follows Guix: packages and services in separate
+        modules.  Container transformer and Steam constructor belong to the
+        package module (nonguix precedent).  The service is a home service
+        at giaox/services/lsfg-vk.scm.
+    D7  nonguix is a declared .guix-channel dependency (I9), with an
+        introduction so it is authenticated in the dependency position too.
+        Rejected: moving the container code to the configuration repository
+        (splits the design, demotes library code to glue); deferring the
+        import to runtime via resolve-interface (hides a real dependency).
+        Accepted cost recorded as U4.
+    D8  Home and system service types cannot be unified — the two service
+        graphs are disjoint, and upstream always writes two types.  The
+        records, the TOML serializer (a plain procedure) and the
+        policy/package selection are therefore shared module-level
+        definitions; only the HOME type is built.  A system type writing
+        /etc/lsfg-vk/conf.toml becomes an addition, never a refactor.
+    D9  PROPOSED, awaiting ruling.  The sandbox configuration has no
+        precedent to follow: nothing in nonguix writes into the sandbox
+        home, which is treated as opaque user state.  It also cannot simply
+        be dropped — the sandbox file is the only configuration Steam's
+        layer can read (I11).  Options:
+          (a) TWO FILES, ONE RECORD.  The service serializes the same
+              configuration to both paths, emitting the single
+              namespace-dependent key — dll — correctly per target: the
+              absolute sandbox path for the host, omitted for the container
+              where the default search already finds it.  RECOMMENDED:
+              preserves upstream's GUI and profile workflow in both
+              namespaces, needs no escape hatch, and prevents the
+              divergence already observed.
+          (b) ONE FILE shared into the container via
+              GUIX_SANDBOX_EXTRA_SHARES plus a host ~/.local/share/Steam
+              symlink so dll can be omitted everywhere.  REJECTED: two new
+              mechanisms, one an escape hatch the design must not require,
+              and a host symlink that misleads other tools.
+          (c) NO sandbox file: LSFGVK_ENV=1 with LSFGVK_* per game in Steam
+              launch options.  Legitimate and Steam-idiomatic, but disables
+              the config file and profiles, making the UI and active_in dead
+              weight under Steam.  Retained as a documented per-game
+              override, not as the mechanism.
+ACCEPTED LIMITATIONS
+    L1  A 32-bit Vulkan client inside the container reads the 64-bit
+        manifest from the shared /usr/share, fails to load the library and
+        skips the layer, logging a loader error.  Upstream's situation on
+        every distribution, since upstream does not architecture-suffix its
+        manifest the way nvidia_layers and MangoHud do.  union32 is not a
+        remedy (I5, I10).
+    L2  On the laptop, machine-system-transform is replace-mesa, which
+        grafts mesa to nvda throughout the system closure — including
+        lsfg-vk, which pulls mesa through qtbase.  The graft rewrites store
+        references inside files, so the manifest's library_path follows the
+        grafted output.  The system and home profiles therefore hold
+        different lsfg-vk store paths; benign, because only the container's
+        manifest is visible inside the container and only the home
+        profile's on the host.  Corollary for verification: the laptop's
+        system closure contains NEITHER ungrafted steam derivation, so any
+        identity check must compare against (replace-mesa …).
+EXTERNAL BLOCKERS
+    B1  RETIRED.  See U2.
+    B2  i686 qtdeclarative does not build — QmltcTests fail to compile
+        during the build phase.  Only reachable by pulling a Qt-dependent
+        package into a 32-bit FHS union, which I10 forbids.
+DISCOVERY RESULTS
+    Upstream surface
+        * Layer identifier: VK_LAYER_LSFGVK_frame_generation.
+        * Upstream's manifest carries disable_environment =
+          { DISABLE_LSFGVK: "1" }.  2.0 has no enable variable; inertness is
+          a property of profile matching.
+        * Variables, from the built binaries: DISABLE_LSFGVK, LSFGVK_CONFIG,
+          LSFGVK_DLL_PATH, LSFGVK_ENV, LSFGVK_FLOW_SCALE, LSFGVK_GPU,
+          LSFGVK_MULTIPLIER, LSFGVK_NO_FP16, LSFGVK_PACING,
+          LSFGVK_PERFORMANCE_MODE, LSFGVK_PROFILE.  No LSFG_* strays.
+        * CMake defaults: VK_LAYER on, CLI on, UI off, XDG files off,
+          DEVELOP off.  LSFGVK_LAYER_LIBRARY_PATH is a CACHE variable;
+          CMAKE_SKIP_RPATH is forced ON by a plain set() and is NOT settable
+          from the command line.
+        * vkNegotiateLoaderLayerInterfaceVersion is annotated
+          visibility("default"), overriding the target's hidden preset, so
+          no patch is needed to export it.
+        * lsfg-vk-common is a STATIC library linked into all three targets;
+          src/vulkan/vulkan.cpp dlopens "libvulkan.so.1".  See I7.
+        * Licence: SPDX GPL-3.0-or-later throughout.
+        * No Khronos headers vendored; vulkan-headers is a required
+          build-time input that never becomes a runtime reference.
+        * conf.toml: version = 2; [global] dll, allow_fp16; repeated
+          [[profile]] name, active_in (string OR array), gpu, multiplier,
+          flow_scale, performance_mode, pacing.  Single-quoted literals.
+        * The binaries also reference /etc/lsfg-vk/conf.toml.  See D8.
+        * Profile identification under Proton reports "(identified via wine
+          executable)"; native matches report "(identified via
+          executable)".
+    Container surface
+        * Record <nonguix-container>; accessors are ngc-* and ALL PUBLIC,
+          including ngc-packages, ngc-preserved-env, ngc-union32/64.
+        * union32 and union64 are DELAYED fields defaulting to derivations
+          of `packages'; this-nonguix-container exists privately, the tell.
+        * (steam-container-for mesa) yields preserved-env '() and 52
+          packages; the base and debug regexps in the launcher are appended
+          by the builder, not held in the field.
+        * bin/<name> is a SYMLINK to a separate nonguix-container-wrapper
+          store item.
+        * The launcher honours GUIX_SANDBOX_HOME; DEBUG=1 starts a PRE-FHS
+          shell (I2).
+        * GUIX_SANDBOX_EXTRA_SHARES is a colon-separated escape hatch the
+          design must not require (I11, D9).
+        * .guix-channel dependency metadata accepts (introduction
+          (channel-introduction (version 0) (commit …) (signer …))).
+    Environment
+        * Lossless.dll at $GUIX_SANDBOX_HOME/.local/share/Steam/steamapps/
+          common/Lossless Scaling/ — the container's default search
+          location, so in-sandbox operation needs no dll configuration; on
+          the host it is unreachable by default, the sole reason the service
+          needs a dll-path field.
+        * Devices on the laptop, as the loader reports them:
+          "Intel(R) Iris(R) Xe Graphics (ADL GT2)" (integrated),
+          "NVIDIA RTX A2000 Laptop GPU" (discrete).
+    Closed items
+        * O1 CLOSED: etc/ld.so.cache is gnu-build-system's standard
+          make-dynamic-linker-cache output (375 entries).  Not cruft; also
+          inert — it lacks libvulkan.so.1 and no /etc/ld.so.cache exists.
+        * O2 CLOSED by mutation: a stale hand-installed manifest under
+          ~/.local/share/vulkan/implicit_layer.d pinned a superseded output
+          and gated on LSFG_VK; since the loader searches $XDG_DATA_HOME
+          unconditionally it polluted even --pure shells, and was in fact
+          the only manifest those shells saw.
+        * OB1 ACCEPTED as upstream behaviour: with no matching profile the
+          layer declines negotiation, the loader fails to find
+          vkGetInstanceProcAddr, logs two ERRORs and SKIPS the layer.
+          Clients exit cleanly; noise, not breakage, and nothing in the
+          package can change it.  Concrete motivation for Phase 4.
+        * OB2 CLOSED as a GPU mismatch: iGPU app with no selector exits 0;
+          dGPU app with no selector hangs after vkAllocateMemory() error
+          -1000072003 (VK_ERROR_INVALID_EXTERNAL_HANDLE); dGPU app with
+          LSFGVK_GPU='NVIDIA RTX A2000 Laptop GPU' exits 0.  Any
+          PRIME-offloaded application MUST have the gpu key or LSFGVK_GPU
+          set — including every Steam game on the laptop (I11).
+:: PHASE 1. PACKAGE — UPSTREAM-FAITHFUL BASELINE
+================================================================================
+    Steps 1.1 (audit), 1.2 (reduction plus the executables-only loader
+    RUNPATH) and 1.3 (host behaviour and inertness) verified.
+COMPLETION ✓
+:: PHASE 2. STEAM SANDBOX INTEGRATION
+================================================================================
+    - Step 2.1: Audit.  Complete.
+    - Step 2.2: Container transformer and Steam constructor.  Complete.
+        Verified: the constructed package evaluates and builds; lsfg-vk in
+        its closure exactly once; union32 pinned (lowered derivations
+        identical) and union64 changed; the union64 manifest's library_path
+        resolves and is in the container closure; the launcher carries the
+        lsfg-vk regexps; the NVIDIA variant evaluates with the @@ read; all
+        of it through an actual pull at two guix revisions.
+    - Step 2.3: Adopt the constructor per machine.  Complete.
+        Desktop: mesa, empty passthrough set.  Laptop: the unversioned
+        `nvda' alias — preserving the lockstep steam-nvidia had with
+        nvidia-module-open — with nonguix' passthrough set read per D5 in
+        the machine file.
+        Verified: both machines evaluate; the deployed union64 carries the
+        manifest beside nvidia_layers; and end to end, a Proton game logged
+          lsfg-vk: using profile with name '2x FG / 100%'
+                   (identified via wine executable)
+        with the gpu key set, and logged nothing with DISABLE_LSFGVK=1.
+    - Step 2.4: Remove the superseded staging machinery.  Complete.
+        The activation service and its now-unused import are gone from
+        home/main.scm; the staged layer and manifest are gone from the
+        sandbox home; the sandbox conf.toml was deliberately kept (I11);
+        home builds; no reference remains outside scratch transcripts.
+COMPLETION ✓
+:: PHASE 3. HOME SERVICE
+================================================================================
+    - Step 3.1: Introduce the service with an inert default.  Applied.
+        giaox/services/lsfg-vk.scm defines <lsfg-vk-configuration> — named
+        without a home- prefix so the system type can share it (D8) — and
+        home-lsfg-vk-service-type, which extends only
+        home-profile-service-type.  home/main.scm instantiates it and drops
+        the bare "lsfg-vk" package entry.
+        Test: home builds; the package is present exactly once; the
+        activation script creates nothing; Phase 2's verification still
+        passes.
+    - Step 3.2: Add declarative configuration content, seeded.
+        * The record mirrors upstream's option set one-for-one, serializing
+          to upstream's exact keys and quoting style; active_in accepts both
+          of upstream's forms.
+        * Records, serializer and policy selection are shared definitions
+          (D8); the serializer is a plain procedure from configuration to
+          file-like.
+        * Targets follow D9 once ruled.
+        * Mode selector: upstream default (writes nothing), seed (written
+          only if absent, left writable), declarative.  Default stays
+          upstream (D2, I4).
+        * Lossless.dll path is a field with no repository-specific default.
+        Test: mode unset creates nothing; seed with no existing file
+        appears, validates and remains UI-writable; seed with an existing
+        file leaves it untouched byte-for-byte; a host client and a Steam
+        game both activate against it.
+    - Step 3.3: Add fully declarative mode.
+        Managed content; the UI becomes a read-only viewer, the accepted
+        cost.  Both modes serialize identically.
+        Test: the file matches the record and validates; the UI cannot save
+        over it; reverting to seed restores writability.
+COMPLETION ☐
+:: PHASE 4. OPT-IN ACTIVATION POLICIES
+================================================================================
+    OB1 motivates this phase: the gated and explicit policies are what stop
+    an idle layer from making every Vulkan client log loader errors.
+    - Step 4.1: A package-side variant constructor — upstream implicit
+      (default, unchanged), gated implicit, explicit.  The gate variable
+      must fall under the LSFGVK_ prefix (I3) and must not collide with the
+      eleven variables upstream reads.  The explicit policy's cost —
+      automatic profile matching and the UI's active_in list become inert —
+      is to be stated where it is defined.  One shared build.
+    - Step 4.2: A policy field on the service, defaulting to upstream
+      implicit; for a non-default policy the service makes the variable
+      reach both the host session and the sandbox, which the transformer's
+      regexp set already covers by construction.
+:: PHASE 5. MACHINE DISPATCH IN THE HOME CONFIGURATION
+================================================================================
+    OB2 makes this load-bearing: without the selector, any application
+    offloaded to the dGPU hangs.
+    - Step 5.1: Machine dispatch in the home configuration, mirroring the
+      system configuration's mechanism, carrying per-machine home values
+      generally.
+    - Step 5.2: The GPU selector per machine.  The laptop's value is proven:
+      "NVIDIA RTX A2000 Laptop GPU".  The desktop's is to be read from the
+      loader, not assumed.
+:: PHASE 6. OUTPUT SPLIT
+================================================================================
+    - Step 6.1: Default output = layer, manifest, CLI; separate output = GUI
+      and XDG files.  Must not change any path the manifest or XDG files
+      reference, and must preserve the executables' loader RUNPATH (I7).
+      Migrate the package module's remaining multi-line comment blocks into
+      this document at the same time (conventions.txt SECTION 5).
+    - Step 6.2: The container transformer takes only the layer output; the
+      service installs the GUI output when wanted, defaulting to installing
+      it.
+:: PHASE 7. VERIFICATION AND DOCUMENTATION
+================================================================================
+    - Step 7.1: End-to-end audit across host client, Steam game, CLI
+      validate, CLI benchmark, GUI round-trip, DISABLE_LSFGVK suppression,
+      per-game profile selection, and each activation policy.  Resolve or
+      formally accept B2, L1, L2, OB1, OB2, U1, U3, U4.
+    - Step 7.2: Record the design in the configuration repository's design
+      document: ownership split, invariants, activation policies and their
+      costs, conf.toml mutability and the two-namespace fact (I11), and the
+      hybrid-graphics GPU requirement.
+COMPLETION ☐
+================================================================================
+END OF LSFG-VK INTEGRATION ROADMAP
+================================================================================
+```
+
+giaox-channel/giaox/packages/boost.scm
+```scm
+(define-module (giaox packages boost)
+  #:use-module (guix packages)
+  #:use-module (gnu packages boost)
+  #:use-module (gnu packages file)
+  #:use-module (guix download)
+  #:use-module (guix build-system gnu)
+  #:use-module (gnu packages base)
+  #:use-module (guix utils)
+  #:use-module (guix gexp))
+
+(define-public boost
+  (package
+    (inherit (@ (gnu packages boost) boost))
+    (version "1.85.0")
+    (source (origin
+              (method url-fetch)
+              (uri (string-append "https://archives.boost.io/release/"
+                                  version "/source/boost_"
+                                  (string-map (lambda (x) (if (char=? x #\.) #\_ x)) version)
+                                  ".tar.bz2"))
+              (sha256
+               (base32
+                "05w63ybpn23b13asl2vvkf24xf5d5cx709vhvimlg5qnm8gzw2bh"))))
+    (arguments
+     (substitute-keyword-arguments (package-arguments (@ (gnu packages boost) boost))
+       ((#:phases phases)
+        #~(modify-phases #$phases
+            (replace 'build
+              (lambda* (#:key make-flags #:allow-other-keys)
+                (apply invoke "./b2"
+                       (format #f "-j~a" 8)  ; Use 8 parallel jobs
+                       make-flags)))
+            (replace 'install
+              (lambda* (#:key make-flags #:allow-other-keys)
+                (apply invoke "./b2"
+                       "install"
+                       (format #f "-j~a" 8)  ; Use 8 parallel jobs
+                       make-flags)))))))
+    (native-inputs
+     (modify-inputs (package-native-inputs (@ (gnu packages boost) boost))
+       (append which file)))))
+
+boost
+
+```
+
+giaox-channel/giaox/packages/chatterino2.scm
+```scm
+(define-module (giaox packages chatterino2)
+  #:use-module (guix packages)
+  #:use-module (guix git-download)
+  #:use-module (guix build-system cmake)
+  #:use-module ((guix licenses) #:prefix license:)
+  #:use-module (gnu packages qt)
+  #:use-module (gnu packages xml)
+  #:use-module (gnu packages bash)
+  #:use-module (guix gexp)
+  #:use-module (gnu packages tls)
+  #:use-module (gnu packages pkg-config)
+  #:use-module (gnu packages web)
+  #:use-module (gnu packages gnome)
+  #:use-module (giaox packages boost))
+
+(define-public chatterino2
+  (package
+    (name "chatterino2")
+    (version "2.5.5")
+    (source
+     (origin
+       (method git-fetch)
+       (uri (git-reference
+             (url "https://github.com/Chatterino/chatterino2")
+             (commit (string-append "v" version))
+             (recursive? #t)))
+       (file-name (git-file-name name version))
+       (sha256
+        (base32 "0qyhqb5fb10lzy5w7qii981kl2rwxbq6slffbgqdlpdw7knzpr9k"))))
+    (build-system cmake-build-system)
+    (arguments
+     (list
+      #:configure-flags
+      #~(list "-DCMAKE_BUILD_TYPE=Release" "-DCHATTERINO_UPDATER=OFF")
+      #:phases
+      #~(modify-phases %standard-phases
+          (delete 'check)
+          (add-before 'configure 'setvars
+            (lambda _
+              (setenv "GIT_HASH" "3f3a31db")))
+          (add-after 'install 'wrap-executable
+            (lambda* _
+              (let ((plugin-path (getenv "QT_PLUGIN_PATH")))
+                (wrap-program (string-append #$output "/bin/chatterino")
+                  `("QT_PLUGIN_PATH" ":" prefix
+                    (,plugin-path)))))))))
+    (native-inputs (list pkg-config))
+    (inputs (list qtbase
+                  qtsvg
+                  qttools
+                  qt5compat
+                  boost
+                  bash-minimal
+                  openssl
+                  libsecret
+                  libnotify
+                  qtwayland
+                  qtimageformats))
+    (synopsis "Chat client for Twitch")
+    (description
+     "Chatterino is a chat client for Twitch chat.
+It aims to be an improved/extended version of the Twitch web chat.")
+    (home-page "https://chatterino.com")
+    (license license:expat)))
+
+chatterino2
+
+```
+
+giaox-channel/giaox/packages/font-google-roboto-mono.scm
+```scm
+(define-module (giaox packages font-google-roboto-mono)
+  #:use-module (guix packages)
+  #:use-module ((guix licenses) #:prefix license:)
+  #:use-module (guix git-download)
+  #:use-module (guix build-system font)
+  #:use-module (guix gexp))
+
+(define-public font-google-roboto-mono
+  (let ((commit "3479a228ba99f69d6e504e7d798a3f8e8239bbe7")
+        (revision "1"))
+    (package
+      (name "font-google-roboto-mono")
+      (version (git-version "0" revision commit))
+      (source
+       (origin
+         (method git-fetch)
+         (uri (git-reference
+               (url "https://github.com/googlefonts/RobotoMono")
+               (commit commit)))
+         (file-name (git-file-name name version))
+         (sha256
+          (base32
+           "07sx4561msqjwnxmjbc6y8x084n0ygf05di3y6fi2hga21ylwz3g"))))
+      (build-system font-build-system)
+      (arguments
+       (list
+        #:phases
+        #~(modify-phases %standard-phases
+            (add-after 'unpack 'move-fonts
+              (lambda _
+                (copy-recursively "fonts/ttf" "fonts"))))))
+      (home-page "https://github.com/googlefonts/RobotoMono")
+      (synopsis "Monospaced font family from Google")
+      (description
+       "Roboto Mono is a monospaced addition to the Roboto type family.
+Like the other members of the Roboto family, the fonts are optimized for
+readability on screens across a wide variety of devices and reading environments.")
+      (license license:asl2.0))))
+
+font-google-roboto-mono
+
+```
+
+giaox-channel/giaox/packages/gamemode.scm
+```scm
+(define-module (giaox packages gamemode)
+  #:use-module (guix packages)
+  #:use-module (guix git-download)
+  #:use-module (guix build-system meson)
+  #:use-module ((guix licenses) #:prefix license:)
+  #:use-module (gnu packages pkg-config)
+  #:use-module (gnu packages glib)
+  #:use-module (gnu packages freedesktop)
+  #:use-module (gnu packages linux))
+
+(define-public gamemode
+  (package
+    (name "gamemode")
+    (version "1.8.1")
+    (source
+     (origin
+       (method git-fetch)
+       (uri (git-reference
+             (url "https://github.com/FeralInteractive/gamemode")
+             (commit version)))
+       (file-name (git-file-name name version))
+       (sha256
+        (base32 "0760brj8iy2ls6gycww7v7fc1f44nzanb6yiacvq1if6r7kipswj"))))
+    (build-system meson-build-system)
+    (arguments
+     `(#:configure-flags
+       (list
+        "-Dwith-sd-bus-provider=elogind"
+        "-Dwith-examples=false"
+        "-Dwith-util=true"
+        "-Dwith-systemd-user-unit=false"
+        "-Dwith-pam-renicing=true"
+        (string-append "-Dwith-pam-limits-dir="
+                       (assoc-ref %outputs "out")
+                       "/etc/security/limits.d")
+        (string-append "-Dwith-dbus-service-dir="
+                       (assoc-ref %outputs "out")
+                       "/share/dbus-1/services"))
+       #:phases
+       (modify-phases %standard-phases
+         (add-after 'install 'wrap-gamemoderun
+           (lambda* (#:key outputs #:allow-other-keys)
+             (let ((out (assoc-ref outputs "out")))
+               (wrap-program (string-append out "/bin/gamemoderun")
+                 `("LD_LIBRARY_PATH" ":" prefix
+                   (,(string-append out "/lib"))))))))
+       #:tests? #f))  ; https://github.com/FeralInteractive/gamemode/issues/468
+    (native-inputs
+     (list pkg-config))
+    (inputs
+     (list dbus libinih elogind))
+    (home-page "https://github.com/FeralInteractive/gamemode")
+    (synopsis "Optimise Linux system performance on demand")
+    (description
+     "Gamemode is a daemon/lib combo for Linux that allows games to request
+a set of optimisations be temporarily applied to the host OS. This package
+uses elogind instead of systemd for session management.")
+    (license license:bsd-3)))
+
+gamemode
+
+```
+
+giaox-channel/giaox/packages/lsfg-vk.scm
+```scm
+(define-module (giaox packages lsfg-vk)
+  #:use-module (guix packages)
+  #:use-module (guix git-download)
+  #:use-module (guix gexp)
+  #:use-module (guix build-system qt)
+  #:use-module ((guix licenses) #:prefix license:)
+  #:use-module (gnu packages qt)
+  #:use-module (gnu packages vulkan)
+  #:use-module (nongnu packages game-client)
+  #:use-module (nonguix multiarch-container))
+
+;; The Vulkan layer identifier, exactly as upstream's
+;; VkLayer_LSFGVK_frame_generation.json.in writes it.  Published so that
+;; nothing downstream has to glob the output to learn it.
+(define-public %lsfg-vk-layer-name
+  "VK_LAYER_LSFGVK_frame_generation")
+
+;; Every environment variable lsfg-vk 2.0 reads, as regexps suitable for a
+;; nonguix container's preserved-env.  Enumerated from the built binaries
+;; rather than from documentation: DISABLE_LSFGVK, plus LSFGVK_CONFIG,
+;; _DLL_PATH, _ENV, _FLOW_SCALE, _GPU, _MULTIPLIER, _NO_FP16, _PACING,
+;; _PERFORMANCE_MODE and _PROFILE.  Nothing lives outside those two
+;; namespaces, so these two regexps are exactly complete; any variable this
+;; channel ever introduces must keep that true.
+(define-public %lsfg-vk-environment-variable-regexps
+  '("^DISABLE_LSFGVK$"
+    "^LSFGVK_"))
+
+(define-public lsfg-vk
+  (let ((commit "8b0da2661c6f3473a7fccc8ba643880050e71642")
+        (revision "2"))
+    (package
+      (name "lsfg-vk")
+      (version (git-version "2.0.0" revision commit))
+      (source
+       (origin
+         (method git-fetch)
+         (uri (git-reference
+               (url "https://github.com/PancakeTAS/lsfg-vk")
+               (commit commit)
+               (recursive? #t)))
+         (file-name (git-file-name name version))
+         (sha256
+          (base32 "0b0qd8czmd4dsppyphlnlizr517mm4l816dazvmy744qwx7mfdj8"))))
+      (build-system qt-build-system)
+      (arguments
+       (list
+        #:qtbase qtbase
+        ;; Upstream ships no test suite.
+        #:tests? #f
+        ;; The layer and the CLI are built by upstream default; the UI and
+        ;; the XDG files are not.
+        ;;
+        ;; LSFGVK_LAYER_LIBRARY_PATH hands the Vulkan loader an absolute
+        ;; store path, which is what makes a single manifest correct both on
+        ;; the host and inside a nonguix container — such a container mounts
+        ;; the closure of its own manifest, not the whole store, so the path
+        ;; resolves there precisely when this package is a container member.
+        ;; Nothing downstream may rewrite it.
+        ;;
+        ;; CMAKE_EXE_LINKER_FLAGS puts the Vulkan loader on the RUNPATH of
+        ;; the EXECUTABLES ONLY.  lsfg-vk-common dlopens "libvulkan.so.1" by
+        ;; bare soname and is a static library linked into all three targets,
+        ;; so the calling object differs per target:
+        ;;   CLI/UI — the caller is the executable, no loader is present in
+        ;;            the process, and ld-wrapper adds RUNPATH only for
+        ;;            libraries that are linked; a dlopened one never is.
+        ;;            Without this the bare soname resolves against nothing
+        ;;            and `lsfg-vk-cli benchmark' and the UI's GPU list fail.
+        ;;   layer  — the caller is liblsfg-vk-layer.so, loaded BY a Vulkan
+        ;;            loader that is already in the process, so the bare
+        ;;            soname matches that loaded object.  That is the only
+        ;;            correct outcome: the layer must use the application's
+        ;;            loader, whichever it is.  Inside the Steam container
+        ;;            that loader comes from the FHS union, and two loader
+        ;;            instances in one process is not a working setup.
+        ;; Hence a linker flag scoped to executables rather than a
+        ;; substitution of the shared source, which would hit the layer too.
+        ;;
+        ;; CMAKE_SKIP_RPATH is deliberately not passed: upstream sets it with
+        ;; a plain set(), which overrides any -D cache entry, so passing it is
+        ;; a no-op.  It does not suppress explicit linker flags.
+        #:configure-flags
+        #~(list "-DLSFGVK_BUILD_UI=ON"
+                "-DLSFGVK_INSTALL_XDG_FILES=ON"
+                (string-append "-DLSFGVK_LAYER_LIBRARY_PATH="
+                               #$output "/lib/liblsfg-vk-layer.so")
+                (string-append "-DCMAKE_EXE_LINKER_FLAGS=-Wl,-rpath="
+                               #$(this-package-input "vulkan-loader") "/lib"))))
+      ;; No phases are needed, and two former ones were removed as
+      ;; unnecessary.  Upstream annotates vkNegotiateLoaderLayerInterfaceVersion
+      ;; with visibility("default"), which overrides the layer target's hidden
+      ;; visibility preset, so the loader's entry point is exported unaided.
+      ;; And upstream's manifest already carries disable_environment with
+      ;; DISABLE_LSFGVK, which is 2.0's own opt-out; activation in 2.0 is a
+      ;; property of profile matching, so no gate is synthesized here.
+      ;;
+      ;; NOTE: this field is honest documentation, not enforcement.  A
+      ;; consumer that passes #:system explicitly — such as nonguix'
+      ;; fhs-union — never consults it, and will happily attempt an i686
+      ;; build.  See container-with-lsfg-vk.
+      (supported-systems '("x86_64-linux"))
+      (inputs
+       (list qtdeclarative
+             ;; Build-time only, and never a runtime reference: upstream
+             ;; vendors no Khronos headers and includes <vulkan/vulkan_core.h>
+             ;; and <vulkan/vk_layer.h> directly.
+             vulkan-headers
+             ;; Referenced through the executables' RUNPATH; see above.
+             vulkan-loader))
+      (home-page "https://github.com/PancakeTAS/lsfg-vk")
+      (synopsis "Vulkan layer for Lossless Scaling frame generation")
+      (description
+       "lsfg-vk is a Vulkan layer that hooks into Vulkan applications and
+generates additional frames using the frame generation algorithm of Lossless
+Scaling.  It registers as an implicit layer and activates per application
+according to the profiles in @file{~/.config/lsfg-vk/conf.toml}, which
+@command{lsfg-vk-ui} edits and @command{lsfg-vk-cli} validates; setting
+@env{DISABLE_LSFGVK} disables it outright.  Frame generation requires
+@file{Lossless.dll} from an installation of Lossless Scaling to be reachable
+at run time.")
+      (license license:gpl3+))))
+
+
+;;;
+;;; Container integration.
+;;;
+;;; Making a Vulkan layer reachable inside an FHS container is a property of
+;;; the layer, not of the application, so it lives here rather than in a
+;;; game-client module — mirroring nonguix, which defines its steam-nvidia
+;;; variants in (nongnu packages nvidia) rather than in (nongnu packages
+;;; game-client).
+;;;
+;;; These imports are why .guix-channel must declare nonguix as a dependency.
+;;;
+
+(define-public (container-with-lsfg-vk container)
+  "Return CONTAINER with lsfg-vk among its 64-bit packages and lsfg-vk's
+environment variables added to its preserved-env.
+
+Membership is the whole mechanism.  The layer manifest lands in the FHS
+union's share/vulkan/implicit_layer.d, which the container mounts at
+/usr/share and which is on the Vulkan loader's default search path, so no
+environment variable is needed to find it.  And because the container mounts
+the closure of its own manifest, membership is also what makes the manifest's
+absolute store library_path resolve inside the sandbox.  Nothing is copied
+and nothing is rewritten.
+
+Only environment variables must still be let through explicitly, which is
+what preserved-env is for."
+  (nonguix-container
+   (inherit container)
+   (packages (append (ngc-packages container)
+                     `(("lsfg-vk" ,lsfg-vk))))
+   ;; union32 must be pinned, not inherited.  It is a DELAYED field whose
+   ;; default is computed from `packages', so appending lsfg-vk there adds it
+   ;; to the 32-bit union as well — which attempts an i686 lsfg-vk and hence
+   ;; an i686 qtdeclarative, and that does not build.  Forcing the field on
+   ;; CONTAINER, whose packages predate our addition, reproduces exactly the
+   ;; 32-bit union nonguix composed, without restating nonguix' formula here.
+   ;;
+   ;; lsfg-vk's (supported-systems '("x86_64-linux")) does NOT prevent this:
+   ;; fhs-union passes #:system explicitly and never consults it.
+   ;;
+   ;; The consequence is accepted: a 32-bit client in the container reads the
+   ;; 64-bit manifest from the shared /usr/share, fails to load the library
+   ;; and skips the layer, logging a loader error.  That is upstream's
+   ;; situation on every distribution, since upstream does not
+   ;; architecture-suffix its manifest the way nvidia_layers and MangoHud do.
+   (union32 (ngc-union32 container))
+   (preserved-env (append %lsfg-vk-environment-variable-regexps
+                          (ngc-preserved-env container)))))
+
+(define-public (steam-with-lsfg-vk driver preserved-env)
+  "Return a Steam package built on DRIVER, with lsfg-vk available inside the
+container and PRESERVED-ENV passed through the sandbox in addition to
+lsfg-vk's own variables.
+
+Composition re-enters at the container level through steam-container-for,
+because nonguix-container->package discards the record and nonguix' own NVIDIA
+variants are produced by a private macro.  Expressing this in terms of
+nonguix' public steam-container-for means upstream churn is absorbed at this
+one site.
+
+Both arguments are required and positional.  They are parameters rather than
+conditionals so that this module stays free of any knowledge of a particular
+graphics driver: the driver and its sandbox passthrough set are machine
+concerns, supplied by the machine configuration.  And neither is defaulted,
+because a default that suits one machine would be silently wrong on the
+other."
+  (let ((container (steam-container-for driver)))
+    (nonguix-container->package
+     (container-with-lsfg-vk
+      (nonguix-container
+       (inherit container)
+       (preserved-env (append preserved-env
+                              (ngc-preserved-env container))))))))
+```
+
+giaox-channel/giaox/packages/obs-backgroundremoval.scm
+```scm
+(define-module (giaox packages obs-backgroundremoval)
+  #:use-module (guix packages)
+  #:use-module (guix gexp)
+  #:use-module (guix git-download)
+  #:use-module (guix download)
+  #:use-module (guix build-system cmake)
+  #:use-module ((guix licenses) #:prefix license:)
+  #:use-module (gnu packages pkg-config)
+  #:use-module (gnu packages video)
+  #:use-module (gnu packages qt)
+  #:use-module (gnu packages cmake)
+  #:use-module (gnu packages ninja)
+  #:use-module (gnu packages image-processing)
+  #:use-module (gnu packages compression)
+  #:use-module (gnu packages gcc)
+  #:use-module (gnu packages curl))
+
+(define-public obs-backgroundremoval
+  (package
+    (name "obs-backgroundremoval")
+    (version "1.1.13")
+    (source (origin
+              (method git-fetch)
+              (uri (git-reference
+                    (url "https://github.com/occ-ai/obs-backgroundremoval")
+                    (commit version)))
+              (file-name (git-file-name name version))
+              (sha256
+               (base32
+                "0ggm9qzkb0mjshsaz3dck40cn8hq4ha3pp6v2hl76f9hg7ybv022")))) ; You'll need to compute this
+    (build-system cmake-build-system)
+    (arguments
+     (list
+      #:tests? #f ; no tests
+      #:configure-flags
+      #~(list (string-append "-DLIBOBS_INCLUDE_DIR="
+                             #$(this-package-input "obs") "/lib")
+              (string-append "-DCMAKE_MODULE_PATH=" #$source "/cmake")
+              "-DUSE_SYSTEM_OPENCV=ON"
+              "-DDISABLE_ONNXRUNTIME_GPU=ON"
+              "-DBUILD_OUT_OF_TREE=On"
+              "-Wno-dev")
+      #:phases
+      #~(modify-phases %standard-phases
+          (add-after 'unpack 'disable-onnxruntime
+            (lambda _
+              ;; Patch CMakeLists.txt to skip onnxruntime entirely
+              (substitute* "CMakeLists.txt"
+                (("include\\(cmake/FetchOnnxruntime\\.cmake\\)")
+                 "# include(cmake/FetchOnnxruntime.cmake) # Disabled for Guix"))
+              ;; Also try to disable in other places
+              (when (file-exists? "cmake/FetchOnnxruntime.cmake")
+                (substitute* "cmake/FetchOnnxruntime.cmake"
+                  (("FetchContent_MakeAvailable.*")
+                   "# FetchContent_MakeAvailable disabled for Guix\n")))))
+          (replace 'configure
+            (lambda* (#:key configure-flags #:allow-other-keys)
+              (mkdir-p "build_x86_64")
+              (with-directory-excursion "build_x86_64"
+                (apply invoke "cmake" ".." configure-flags))))
+          (replace 'build
+            (lambda _
+              (invoke "cmake" "--build" "build_x86_64" "--parallel")))
+          (replace 'install
+            (lambda _
+              (invoke "cmake" "--install" "build_x86_64" "--prefix" #$output))))))
+    (native-inputs (list cmake ninja pkg-config))
+    (inputs (list obs
+                  opencv
+                  qtbase ; Assuming Qt5, change to qtbase-6 if Qt6 is available and preferred
+                  curl))
+    (home-page "https://github.com/occ-ai/obs-backgroundremoval")
+    (synopsis "OBS plugin to replace the background in portrait images and video")
+    (description "This OBS plugin uses machine learning to detect and remove
+or replace backgrounds in portrait images and videos in real-time, providing
+green screen-like functionality without requiring an actual green screen.")
+    (license license:expat)))
+
+obs-backgroundremoval
+
+```
+
+giaox-channel/giaox/packages/odin.scm
+```scm
+(define-module (giaox packages odin)
+  #:use-module (guix packages)
+  #:use-module (guix git-download)
+  #:use-module (guix build-system gnu)
+  #:use-module (guix licenses)
+  #:use-module (gnu packages llvm)
+  #:use-module (gnu packages base)
+  #:use-module (gnu packages python)
+  #:use-module (gnu packages gcc)
+  #:use-module (srfi srfi-1))
+
+(define-public odin
+  (package
+    (name "odin")
+    (version "dev-2025-04")
+    (source
+     (origin
+       (method git-fetch)
+       (uri (git-reference
+             (url "https://github.com/odin-lang/Odin")
+             (commit version)))
+       (file-name (git-file-name name version))
+       (sha256
+        (base32 "0sfgbw4m4a10yvbwqpia7jwff8rlbjb16kkzvnr04xld0qrbnl3m"))))
+    (build-system gnu-build-system)
+    (arguments
+     `(#:tests? #f
+       #:phases
+       (modify-phases %standard-phases
+         (delete 'configure)
+         (replace 'build
+           (lambda* (#:key inputs #:allow-other-keys)
+             (setenv "LLVM_CONFIG"
+                     (string-append (assoc-ref inputs "llvm")
+                                  "/bin/llvm-config"))
+             (setenv "CXX"
+                     (string-append (assoc-ref inputs "clang-toolchain")
+                                  "/bin/clang++"))
+             (invoke "sh" "build_odin.sh" "release")))
+         (replace 'install
+           (lambda* (#:key inputs outputs #:allow-other-keys)
+             (let* ((out (assoc-ref outputs "out"))
+                    (bin (string-append out "/bin"))
+                    (share (string-append out "/share")))
+               (install-file "odin" bin)
+               (for-each
+                (lambda (dir)
+                  (copy-recursively dir (string-append share "/" dir)))
+                '("base" "core" "vendor" "shared"))
+               (setenv "CC" (string-append (assoc-ref inputs "gcc") "/bin/gcc"))
+               (for-each
+                (lambda (lib)
+                  (with-directory-excursion
+                   (string-append share "/vendor/" lib "/src")
+                   (invoke "make")))
+                '("cgltf" "stb" "miniaudio"))
+               (wrap-program (string-append bin "/odin")
+                 `("PATH" prefix
+                   (,(string-append (assoc-ref inputs "clang-toolchain") "/bin")))
+                 `("ODIN_ROOT" = (,share)))))))))
+    (native-inputs
+     (list llvm-18
+           gcc
+           which
+           python-minimal))
+    (propagated-inputs
+     (list clang-toolchain-18))
+    (home-page "https://odin-lang.org/")
+    (synopsis "Fast, concise, readable, pragmatic programming language")
+    (description
+     "Odin is a general-purpose programming language with distinct typing built
+for high performance, modern systems and data-oriented programming. It includes
+vendor libraries for cgltf (glTF 2.0 parser), stb (single-file public domain
+libraries), and miniaudio (audio playback and capture) functionality.")
+    (license bsd-3)))
+
+odin
+
+```
+
+giaox-channel/giaox/packages/ols.scm
+```scm
+(define-module (giaox packages ols)
+  #:use-module (guix packages)
+  #:use-module (guix git-download)
+  #:use-module (guix build-system gnu)
+  #:use-module (guix licenses)
+  #:use-module (giaox packages odin)
+  #:use-module (gnu packages base)
+  #:use-module (gnu packages version-control)  ; For git
+  #:use-module (srfi srfi-1))
+
+(define-public ols
+  (package
+    (name "ols")
+    (version "0-unstable-2025-05-01")
+    (source
+     (origin
+       (method git-fetch)
+       (uri (git-reference
+             (url "https://github.com/DanielGavin/ols")
+             (commit "9172bd42c8b0977aa62aa899a8ed09e5b822d021")))
+       (file-name (git-file-name name version))
+       (sha256
+        (base32 "15y1bw65pw0vcgdjzz8jxb1ggbgbh4nxf81ias9jfi040v0c8ijg"))))
+    (build-system gnu-build-system)
+    (arguments
+     `(#:tests? #f
+       #:phases
+       (modify-phases %standard-phases
+         (delete 'configure)
+         (add-after 'unpack 'patch-build-scripts
+           (lambda _
+             (substitute* "build.sh"
+               (("-microarch:native") ""))
+             (chmod "build.sh" #o755)
+             (chmod "odinfmt.sh" #o755)))
+         (replace 'build
+           (lambda* (#:key inputs #:allow-other-keys)
+             (invoke "./build.sh")
+             (invoke "./odinfmt.sh")))
+         (replace 'install
+           (lambda* (#:key inputs outputs #:allow-other-keys)
+             (let* ((out (assoc-ref outputs "out"))
+                    (bin (string-append out "/bin")))
+               (install-file "ols" bin)
+               (install-file "odinfmt" bin)
+               (wrap-program (string-append bin "/ols")
+                 `("ODIN_ROOT" =
+                   (,(string-append (assoc-ref inputs "odin") "/share")))))))
+         (delete 'validate-runpath))))
+    (native-inputs
+     (list which git))  ; Added git to native-inputs
+    (inputs
+     (list odin))
+    (home-page "https://github.com/DanielGavin/ols")
+    (synopsis "Language server for the Odin programming language")
+    (description
+     "OLS (Odin Language Server) is a language server implementation for the
+Odin programming language, providing IDE-like features through the Language
+Server Protocol (LSP).  It includes the odinfmt formatting tool.")
+    (license expat)))
+
+ols
+
+```
+
+giaox-channel/giaox/packages/pcsx2.scm
+```scm
+(define-module (giaox packages pcsx2)
+  #:use-module (guix packages)
+  #:use-module (guix git-download)
+  #:use-module (guix build-system gnu)
+  #:use-module (guix utils)
+  #:use-module ((guix licenses) #:prefix license:)
+  #:use-module (gnu packages)
+  #:use-module (gnu packages gl)
+  #:use-module (gnu packages compression)
+  #:use-module (gnu packages perl)
+  #:use-module (gnu packages pkg-config)
+  #:use-module (gnu packages xorg)
+  #:use-module (guix gexp))
+
+(define-public libretro-pcsx2
+  ;; Use the specific commit from the Nix package
+  (let ((commit "6cc162de2162a0ffe92a4e0470141b9c7c095bf3")
+        (revision "0"))
+    (package
+      (name "libretro-pcsx2")
+      ;; Version based on date as there are no official releases
+      (version (git-version "0" revision commit))
+      (source
+       (origin
+         (method git-fetch)
+         (uri (git-reference
+               (url "https://github.com/libretro/ps2")
+               (commit commit)
+               (recursive? #t)))
+         (file-name (git-file-name name version))
+         (sha256
+          (base32 "0sz90knj1iwkd7r51a94bfw22mx94r3fnimvgivbk9y2vsg3hcw7"))))
+      (build-system gnu-build-system)
+      (arguments
+       (list
+        #:tests? #f                     ;no test suite
+        #:phases
+        #~(modify-phases %standard-phases
+            (delete 'configure)         ;no configure script
+            (add-after 'unpack 'setup-build-environment
+              (lambda* (#:key inputs #:allow-other-keys)
+                ;; Find where libretro-common headers are
+                (let ((dirs '("3rdparty/libretro-common"
+                             "libretro-common"
+                             "deps/libretro-common")))
+                  (for-each
+                   (lambda (dir)
+                     (when (file-exists? dir)
+                       (format #t "Found libretro-common at: ~a~%" dir)
+                       ;; Copy the include directory to the root
+                       (when (file-exists? (string-append dir "/include"))
+                         (copy-recursively (string-append dir "/include") "include"))))
+                   dirs))
+
+                ;; Create missing Config.h
+                (mkdir-p "pcsx2")
+                (with-output-to-file "pcsx2/Config.h"
+                  (lambda ()
+                    (display "#ifndef __PS2EMU_CONFIG_H__\n")
+                    (display "#define __PS2EMU_CONFIG_H__\n")
+                    (display "#define ENABLE_OPENGL 0\n")
+                    (display "#define ENABLE_VULKAN 0\n")
+                    (display "#endif\n")))
+
+                ;; Check if we have the headers where expected
+                (when (file-exists? "include/libretro.h")
+                  (format #t "Found libretro.h in include/~%"))
+
+                ;; Set up include paths for the build
+                (setenv "C_INCLUDE_PATH"
+                        (string-append (getcwd) "/include:"
+                                     (or (getenv "C_INCLUDE_PATH") "")))
+                (setenv "CPLUS_INCLUDE_PATH"
+                        (string-append (getcwd) "/include:"
+                                     (or (getenv "CPLUS_INCLUDE_PATH") "")))))
+            (replace 'build
+              (lambda* (#:key make-flags #:allow-other-keys)
+                ;; Build with the correct flags
+                (apply invoke "make"
+                       (append make-flags
+                              (list
+                               (string-append "CC=" #$(cc-for-target))
+                               (string-append "CXX=" #$(cxx-for-target))
+                               (string-append "GIT_VERSION=" #$commit)
+                               (string-append "CFLAGS=-msse -msse2 -msse4.1 -mfxsr -I"
+                                            (getcwd) "/include")
+                               (string-append "CXXFLAGS=-msse -msse2 -msse4.1 -mfxsr -I"
+                                            (getcwd) "/include"))))))
+            (replace 'install
+              (lambda _
+                (let ((libretro-dir (string-append #$output "/lib/libretro")))
+                  (mkdir-p libretro-dir)
+                  ;; Find and install the libretro core
+                  (for-each
+                   (lambda (file)
+                     (format #t "Found potential core: ~a~%" file)
+                     (install-file file libretro-dir))
+                   (find-files "." ".*_libretro\\.so$"))
+                  ;; If no _libretro.so found, look for any .so
+                  (when (null? (find-files libretro-dir "\\.so$"))
+                    (for-each
+                     (lambda (file)
+                       (format #t "Found .so file: ~a~%" file)
+                       (install-file file libretro-dir))
+                     (find-files "bin" "\\.so$")))))))))
+      (native-inputs
+       (list perl
+             pkg-config))
+      (inputs
+       (list mesa
+             glu
+             xz))
+      (home-page "https://github.com/libretro/ps2")
+      (synopsis "Port of PCSX2 to libretro")
+      (description
+       "This package provides a port of PCSX2, the PlayStation 2 emulator, to
+the libretro API.  It can be used with RetroArch and other libretro
+frontends.")
+      (supported-systems '("x86_64-linux" "i686-linux"))
+      (license license:gpl3+))))
+
+libretro-pcsx2
+
+```
+
+giaox-channel/giaox/packages/python-twitchapi.scm
+```scm
+(define-module (giaox packages python-twitchapi)
+  #:use-module (guix packages)
+  #:use-module (guix download)
+  #:use-module (guix build-system python)
+  #:use-module (guix build-system pyproject)
+  #:use-module ((guix licenses) #:prefix license:)
+  #:use-module (gnu packages python-web)
+  #:use-module (gnu packages python-xyz)
+  #:use-module (gnu packages time)
+  #:use-module (gnu packages tls)
+  #:use-module (gnu packages python-build)
+  #:use-module (gnu packages pkg-config)
+  #:use-module (gnu packages check)
+  #:use-module (gnu packages python-check)
+  #:use-module (gnu packages libffi)
+  #:use-module (gnu packages )
+  #:use-module (gnu packages)
+  #:use-module (guix gexp)
+  #:use-module (guix git-download)
+  #:use-module (srfi srfi-1))
+
+(define-public python-twitchapi
+  (package
+    (name "python-twitchapi")
+    (version "4.2.1")
+    (source
+     (origin
+       (method url-fetch)
+       (uri (pypi-uri "twitchapi" version))
+       (sha256
+        (base32 "130c56g9hcr6j5n4p37fmkgcbwljvx2714s7s61grpciv29kiir4"))))
+    (build-system pyproject-build-system)
+    (propagated-inputs (list python-aiohttp python-dateutil
+                             python-typing-extensions))
+    (home-page "https://github.com/Teekeks/pyTwitchAPI")
+    (synopsis
+     "A Python 3.7+ implementation of the Twitch Helix API, PubSub, EventSub and Chat")
+    (description
+     "This package provides a Python 3.7+ implementation of the Twitch Helix API,
+@code{PubSub}, @code{EventSub} and Chat.")
+    (license license:expat)))
+
+(define-public python-aiohttp
+  (package
+    (name "python-aiohttp")
+    (version "3.9.5")
+    (source
+     (origin
+       (method url-fetch)
+       (uri (pypi-uri "aiohttp" version))
+       (sha256
+        (base32 "0l9md5njzq1dd3r49q8c2spbdksb5m45xxdgnjfv5vicfwapvspd"))))
+    (build-system pyproject-build-system)
+    (arguments
+     '(#:tests? #f  ; Temporarily disable tests
+       #:phases
+       (modify-phases %standard-phases
+         (add-before 'build 'set-build-env
+           (lambda _
+             (setenv "AIOHTTP_NO_EXTENSIONS" "1")))
+         (delete 'check))))  ; Remove the default check phase
+    (native-inputs
+     (list python-setuptools))
+    (propagated-inputs
+     (list python-aiosignal
+           python-async-timeout
+           python-attrs
+           python-frozenlist
+           python-multidict
+           python-yarl
+           python-typing-extensions))
+    (home-page "https://github.com/aio-libs/aiohttp")
+    (synopsis "Async http client/server framework (asyncio)")
+    (description "Async http client/server framework (asyncio).")
+    (license license:asl2.0)))
+
+(define-public python-aiodns
+  (package
+    (name "python-aiodns")
+    (version "3.2.0")
+    (source
+     (origin
+       (method url-fetch)
+       (uri (pypi-uri "aiodns" version))
+       (sha256
+        (base32
+         "0wlgfvl1gqz8arbnfdlyk9626srik24yr0r80wdw4jck80irp1k2"))))
+    (build-system python-build-system)
+    (propagated-inputs (list python-pycares))
+    (arguments
+     `(#:tests? #f))                    ;tests require internet access
+    (home-page "https://github.com/saghul/aiodns")
+    (synopsis "Simple DNS resolver for asyncio")
+    (description "@code{aiodns} provides a simple way for doing
+asynchronous DNS resolutions with a synchronous looking interface by
+using @url{https://github.com/saghul/pycares,pycares}.")
+    (license license:expat)))
+
+(define-public python-aiosignal
+  (package
+    (name "python-aiosignal")
+    (version "1.3.1")
+    (source
+     (origin
+       (method url-fetch)
+       (uri (pypi-uri "aiosignal" version))
+       (sha256
+        (base32 "1z4cnqww6j0xl6f3vx2r6kfv1hdny1pnlll7difvfj8nbvhrdkal"))))
+    (build-system pyproject-build-system)
+    (arguments (list #:test-flags #~(list "tests")))
+    (propagated-inputs (list python-frozenlist))
+    (native-inputs (list python-pytest python-pytest-asyncio python-pytest-cov))
+    (home-page "https://github.com/aio-libs/aiosignal")
+    (synopsis "Callback manager for Python @code{asyncio} projects")
+    (description "This Python module provides @code{Signal}, an abstraction to
+register asynchronous callbacks.  The @code{Signal} abstraction can be used
+for adding, removing and dropping callbacks.")
+    (license license:asl2.0)))
+
+(define-public python-frozenlist
+  (package
+    (name "python-frozenlist")
+    (version "1.4.1")
+    (source
+     (origin
+       (method url-fetch)
+       (uri (pypi-uri "frozenlist" version))
+       (sha256
+        (base32 "0as0xp4fhxy8x4ycxak9dfdrs2xrgf0lvfma2ck9l18khmpahdy0"))))
+    (build-system pyproject-build-system)
+    (arguments
+     '(#:tests? #f  ; Disable tests
+       #:phases
+       (modify-phases %standard-phases
+         (add-before 'build 'set-build-env
+           (lambda _
+             (setenv "FROZENLIST_NO_EXTENSIONS" "1")))
+         (add-after 'unpack 'fix-build-backend
+           (lambda _
+             (substitute* "pyproject.toml"
+               (("backend-path.*") "")
+               (("build-backend.*") "build-backend = \"setuptools.build_meta\"\n")))))))
+    (native-inputs
+     (list python-pytest))
+    (propagated-inputs
+     (list python-setuptools
+           python-wheel
+           python-expandvars
+           python-tomli))
+    (home-page "https://github.com/aio-libs/frozenlist")
+    (synopsis "List-like data structure for Python")
+    (description "@code{frozenlist.FrozenList} is a list-like structure which
+implements @code{collections.abc.MutableSequence}.  It can be made immutable
+by calling @code{FrozenList.freeze}.")
+    (license license:asl2.0)))
+
+(define-public python-expandvars
+  (package
+    (name "python-expandvars")
+    (version "0.12.0")
+    (source
+     (origin
+       (method url-fetch)
+       (uri (pypi-uri "expandvars" version))
+       (sha256
+        (base32 "0i6q4i8dzsax85w1l2hc7saymyh3fw43vkifh5flpkr8ayjxy6kx"))))
+    (build-system pyproject-build-system)
+    (arguments
+     '(#:tests? #f))  ; Disable tests
+    (native-inputs
+     (list python-hatchling))
+    (propagated-inputs
+     (list python-setuptools))
+    (home-page "https://github.com/sayanarijit/expandvars")
+    (synopsis "Expand system variables Unix style")
+    (description "Expand system variables Unix style.")
+    (license license:expat)))
+
+(define-public python-yarl
+  (package
+    (name "python-yarl")
+    (version "1.9.4")
+    (source
+     (origin
+       (method url-fetch)
+       (uri (pypi-uri "yarl" version))
+       (sha256
+        (base32 "1gs6hapnz5wsb1zfi0b6y10aw259ffvq7c2qkfwq106g2xkvhvan"))))
+    (build-system pyproject-build-system)
+    (arguments
+     '(#:tests? #f  ; Disable tests
+       #:phases
+       (modify-phases %standard-phases
+         (add-before 'build 'set-build-env
+           (lambda _
+             (setenv "YARL_NO_EXTENSIONS" "1")))
+         (add-after 'unpack 'fix-build-backend
+           (lambda _
+             (substitute* "pyproject.toml"
+               (("backend-path.*") "")
+               (("build-backend.*") "build-backend = \"setuptools.build_meta\"\n")))))))
+    (native-inputs
+     (list python-pytest))
+    (propagated-inputs
+     (list python-idna
+           python-multidict
+           python-typing-extensions
+           python-setuptools
+           python-wheel
+           python-expandvars
+           python-tomli))
+    (home-page "https://github.com/aio-libs/yarl")
+    (synopsis "Yet another URL library")
+    (description "Yet another URL library.")
+    (license license:asl2.0)))
+
+(define-public python-pycares
+  (package
+    (name "python-pycares")
+    (version "4.4.0")
+    (source
+     (origin
+       (method url-fetch)
+       (uri (pypi-uri "pycares" version))
+       (sha256
+        (base32
+         "1hp16c3v78dnwacqc2bqnsrv3lrag12j1rvcs7fnxxgj13apjxgl"))))
+    (build-system python-build-system)
+    (arguments `(#:tests? #f))          ;tests require internet access
+    (propagated-inputs (list python-cffi))
+    (home-page "https://github.com/saghul/pycares")
+    (synopsis "Python interface for @code{c-ares}")
+    (description "@code{pycares} is a Python module which provides an
+interface to @code{c-ares}, a C library that performs DNS requests and
+name resolutions asynchronously.")
+    (license license:expat)))
+
+python-twitchapi
+
+```
+
+giaox-channel/giaox/packages/q4wine.scm
+```scm
+(define-module (giaox packages q4wine)
+  #:use-module (guix packages)
+  #:use-module (guix git-download)
+  #:use-module (guix build-system cmake)
+  #:use-module (guix licenses)
+  #:use-module (gnu packages base)
+  #:use-module (gnu packages qt)
+  #:use-module (gnu packages wine)
+  #:use-module (gnu packages databases)
+  #:use-module (gnu packages image)
+  #:use-module (gnu packages wget)
+  #:use-module (gnu packages admin)
+  #:use-module (gnu packages sqlite))
+
+(define-public q4wine
+  (package
+    (name "q4wine")
+    (version "1.3.13")
+    (source (origin
+              (method git-fetch)
+              (uri (git-reference
+                    (url "https://github.com/brezerk/q4wine")
+                    (commit (string-append "v" version))))
+              (file-name (git-file-name name version))
+              (sha256
+               (base32
+                "04gw5y3dxdpivm2xqacqq85fdzx7xkl0c3h3hdazljb0c3cxxs6h"))))
+    (build-system cmake-build-system)
+    (arguments
+     `(#:tests? #f
+       #:configure-flags
+       '("-DCMAKE_INSTALL_LIBDIR=lib"
+         "-DCMAKE_SKIP_BUILD_RPATH=FALSE"
+         "-DCMAKE_SKIP_INSTALL_RPATH=FALSE"
+         "-DWITH_ICOUTILS=ON"
+         "-DWITH_WINEAPPDB=ON"
+         "-DWITH_DBUS=ON")
+       #:phases
+       (modify-phases %standard-phases
+         (add-after 'install 'wrap-program
+           (lambda* (#:key inputs outputs #:allow-other-keys)
+             (let ((out (assoc-ref outputs "out")))
+               (wrap-program (string-append out "/bin/q4wine")
+                 `("PATH" ":" prefix
+                   ,(map (lambda (input)
+                           (string-append (assoc-ref inputs input) "/bin"))
+                         '("icoutils" "wget" "wine"))))))))))
+    (inputs
+     (list qtbase-5
+           qtsvg-5
+           sqlite
+           icoutils
+           wget
+           wine))
+    (native-inputs
+     (list qttools-5))
+    (home-page "https://q4wine.brezblock.org.ua/")
+    (synopsis "Qt GUI for Wine")
+    (description
+     "Q4Wine is a Qt GUI for Wine that helps manage Wine prefixes and installed applications.")
+    (license gpl3+)))
+
+q4wine
+
+```
+
+giaox-channel/giaox/packages/ungoogled-chromium.scm
+```scm
+(define-module (giaox packages ungoogled-chromium)
+  #:use-module ((guix licenses) #:prefix license:)
+  #:use-module (guix packages)
+  #:use-module (guix gexp)
+  #:use-module (guix download)
+  #:use-module (guix git-download)
+  #:use-module (guix utils)
+  #:use-module (guix build-system gnu)
+  #:use-module (gnu packages)
+  #:use-module (gnu packages base)
+  #:use-module (gnu packages bash)
+  #:use-module (gnu packages bison)
+  #:use-module (gnu packages build-tools)
+  #:use-module (gnu packages compression)
+  #:use-module (gnu packages cups)
+  #:use-module (gnu packages curl)
+  #:use-module (gnu packages fontutils)
+  #:use-module (gnu packages freedesktop)
+  #:use-module (gnu packages gl)
+  #:use-module (gnu packages glib)
+  #:use-module (gnu packages gnome)
+  #:use-module (gnu packages gperf)
+  #:use-module (gnu packages gtk)
+  #:use-module (gnu packages icu4c)
+  #:use-module (gnu packages image)
+  #:use-module (gnu packages linux)
+  #:use-module (gnu packages llvm)
+  #:use-module (gnu packages ninja)
+  #:use-module (gnu packages node)
+  #:use-module (gnu packages nss)
+  #:use-module (gnu packages pkg-config)
+  #:use-module (gnu packages pulseaudio)
+  #:use-module (gnu packages python)
+  #:use-module (gnu packages python-xyz)
+  #:use-module (gnu packages rust)
+  #:use-module (gnu packages video)
+  #:use-module (gnu packages vulkan)
+  #:use-module (gnu packages xiph)
+  #:use-module (gnu packages xml)
+  #:use-module (gnu packages xorg)
+  #:use-module (gnu packages xdisorg)
+  #:use-module (gnu packages libffi)
+  #:use-module (gnu packages regex)
+  #:use-module (gnu packages python-web))
+
+(define %chromium-version "136.0.7103.92")
+(define %ungoogled-revision (string-append %chromium-version "-1"))
+
+(define %ungoogled-origin
+  (origin
+    (method git-fetch)
+    (uri (git-reference
+          (url "https://github.com/ungoogled-software/ungoogled-chromium")
+          (commit %ungoogled-revision)))
+    (file-name (git-file-name "ungoogled-chromium" %ungoogled-revision))
+    (sha256
+     (base32 "1pcdlj0cn8p057pvcsrg2rc3z79z7my3lf31lksr2a2npcdym7wr"))))
+
+(define %preserved-third-party-files
+  '("base/third_party/cityhash"
+    "base/third_party/double_conversion"
+    "base/third_party/icu"
+    "base/third_party/superfasthash"
+    "base/third_party/symbolize"
+    "base/third_party/xdg_user_dirs"
+    "chrome/third_party/mozilla_security_manager"
+    "net/third_party/mozilla_security_manager"
+    "net/third_party/nss"
+    "net/third_party/quiche"
+    "net/third_party/uri_template"
+    "third_party/abseil-cpp"
+    "third_party/angle"
+    "third_party/angle/src/common/third_party/xxhash"
+    "third_party/angle/src/third_party/libXNVCtrl"
+    "third_party/angle/src/third_party/volk"
+    "third_party/apple_apsl"
+    "third_party/axe-core"
+    "third_party/blink"
+    "third_party/boringssl"
+    "third_party/boringssl/src/third_party/fiat"
+    "third_party/breakpad"
+    "third_party/brotli"
+    "third_party/catapult"
+    "third_party/ced"
+    "third_party/cld_3"
+    "third_party/closure_compiler"
+    "third_party/crashpad"
+    "third_party/crc32c"
+    "third_party/dav1d"
+    "third_party/dawn"
+    "third_party/devtools-frontend"
+    "third_party/distributed_point_functions"
+    "third_party/dom_distiller_js"
+    "third_party/eigen3"
+    "third_party/emoji-segmenter"
+    "third_party/farmhash"
+    "third_party/fdlibm"
+    "third_party/fft2d"
+    "third_party/flatbuffers"
+    "third_party/gemmlowp"
+    "third_party/google_input_tools"
+    "third_party/googletest"
+    "third_party/harfbuzz-ng"
+    "third_party/highway"
+    "third_party/hunspell"
+    "third_party/inspector_protocol"
+    "third_party/jinja2"
+    "third_party/khronos"
+    "third_party/leveldatabase"
+    "third_party/libaddressinput"
+    "third_party/libaom"
+    "third_party/libgav1"
+    "third_party/libjingle_xmpp"
+    "third_party/libphonenumber"
+    "third_party/libsrtp"
+    "third_party/libsync"
+    "third_party/liburlpattern"
+    "third_party/libva_protected_content"
+    "third_party/libvpx"
+    "third_party/libwebm"
+    "third_party/libxml/chromium"
+    "third_party/libyuv"
+    "third_party/lottie"
+    "third_party/lss"
+    "third_party/mako"
+    "third_party/markupsafe"
+    "third_party/mesa_headers"
+    "third_party/metrics_proto"
+    "third_party/minigbm"
+    "third_party/modp_b64"
+    "third_party/nasm"
+    "third_party/node"
+    "third_party/one_euro_filter"
+    "third_party/openscreen"
+    "third_party/ots"
+    "third_party/pdfium"
+    "third_party/perfetto"
+    "third_party/pffft"
+    "third_party/ply"
+    "third_party/polymer"
+    "third_party/protobuf"
+    "third_party/pyjson5"
+    "third_party/rnnoise"
+    "third_party/rust"
+    "third_party/securemessage"
+    "third_party/skia"
+    "third_party/smhasher"
+    "third_party/snappy"
+    "third_party/sqlite"
+    "third_party/swiftshader"
+    "third_party/tensorflow-text"
+    "third_party/tflite"
+    "third_party/ukey2"
+    "third_party/vulkan-deps"
+    "third_party/wayland"
+    "third_party/webdriver"
+    "third_party/webgpu-cts"
+    "third_party/webrtc"
+    "third_party/widevine"
+    "third_party/woff2"
+    "third_party/x11proto"
+    "third_party/xnnpack"
+    "third_party/zlib/google"
+    "third_party/zxcvbn-cpp"
+    "url/third_party/mozilla"
+    "v8/third_party/inspector_protocol"
+    "v8/third_party/v8"))
+
+(define opus+custom
+  (package/inherit opus
+    (name "opus+custom")
+    (arguments
+     (substitute-keyword-arguments (package-arguments opus)
+       ((#:configure-flags flags ''())
+        `(cons "--enable-custom-modes" ,flags))))))
+
+(define-public ungoogled-chromium
+  (package
+    (name "ungoogled-chromium")
+    (version %ungoogled-revision)
+    (source (origin
+              (method url-fetch)
+              (uri (string-append "https://commondatastorage.googleapis.com"
+                                  "/chromium-browser-official/chromium-"
+                                  %chromium-version ".tar.xz"))
+              (sha256
+               (base32 "1wjcrlas1xi88xjw31cjqqzpabk1y2lykwbv6r46jml6y67gi9rz"))
+              (modules '((guix build utils)))
+              (snippet
+               #~(begin
+                   (let ((chromium-dir (getcwd)))
+                     (set-path-environment-variable
+                      "PATH" '("bin")
+                      (list #+patch #+python-wrapper #+zstd))
+
+                     (with-directory-excursion #+%ungoogled-origin
+                       (format #t "Ungooglifying...~%")
+                       (force-output)
+                       (invoke "python" "utils/prune_binaries.py" chromium-dir
+                               "pruning.list")
+                       (invoke "python" "utils/patches.py" "apply" chromium-dir
+                               "patches")
+                       (invoke "python" "utils/domain_substitution.py" "apply" "-r"
+                               "domain_regex.list" "-f" "domain_substitution.list"
+                               "-c" "/tmp/domainscache.tar.gz" chromium-dir))
+
+                     (format #t "Pruning third party files...~%")
+                     (force-output)
+                     (apply invoke "python"
+                            "build/linux/unbundle/remove_bundled_libraries.py"
+                            "--do-remove" '#$%preserved-third-party-files)
+
+                     (format #t "Replacing GN files...~%")
+                     (force-output)
+                     (invoke "python" "build/linux/unbundle/replace_gn_files.py"
+                             "--system-libraries" "ffmpeg" "flac" "fontconfig" "freetype"
+                             "harfbuzz-ng" "icu" "libdrm"
+                             "libpng" "libwebp" "libxml" "libxslt" "opus"))))))
+    (build-system gnu-build-system)
+    (arguments
+     (list
+      #:tests? #f
+      #:configure-flags
+      #~(list "is_debug=false"
+              "is_official_build=true"
+              "clang_use_chrome_plugins=false"
+              "chrome_pgo_phase=0"
+              "use_custom_libcxx=false"
+              "use_sysroot=false"
+              "use_unofficial_version_number=false"
+              "treat_warnings_as_errors=false"
+              "use_official_google_api_keys=false"
+              "disable_fieldtrial_testing_config=true"
+              "safe_browsing_mode=0"
+              "enable_nacl=false"
+              "enable_widevine=false"
+              "enable_rust=true"
+              "use_thin_lto=false"
+              "custom_toolchain=\"//build/toolchain/linux/unbundle:default\""
+              "host_toolchain=\"//build/toolchain/linux/unbundle:default\""
+              (string-append "clang_base_path=\""
+                             (dirname (dirname (search-input-file %build-inputs
+                                                                  "/bin/clang")))
+                             "\"")
+              "use_system_freetype=true"
+              "use_system_harfbuzz=true"
+              "use_system_libffi=true"
+              "media_use_ffmpeg=true"
+              "proprietary_codecs=true"
+              "ffmpeg_branding=\"Chrome\""
+              "use_pulseaudio=true"
+              "link_pulseaudio=true"
+              "enable_hangout_services_extension=false"
+              "enable_mdns=false"
+              "enable_mse_mpeg2ts_stream_parser=true"
+              "enable_reading_list=false"
+              "enable_remoting=false"
+              "enable_reporting=false"
+              "enable_service_discovery=false"
+              "enable_vr=false"
+              "enable_js_type_check=false"
+              "use_system_zlib=true"
+              "use_system_libjpeg=true"
+              "use_system_libpng=true"
+              #$@(if (target-x86-64?)
+                     '("use_vaapi=true")
+                     '()))
+      #:phases
+      #~(modify-phases %standard-phases
+(add-after 'unpack 'patch-stuff
+  (lambda _
+    ;; Fix the exec_script_allowlist definition to be a valid empty list
+    (substitute* ".gn"
+      (("exec_script_allowlist =.*\n.*build_dotfile_settings.*\n.*angle_dotfile_settings.*\n.*\\[.*\\]")
+       "exec_script_allowlist = [\n    # List intentionally empty\n  ]"))
+
+    (substitute* "third_party/pdfium/BUILD.gn"
+      (("/usr/include/openjpeg-")
+       (string-append #$(this-package-input "openjpeg")
+                     "/include/openjpeg-")))
+
+    (substitute* (find-files "." "\\.(h|cc)$")
+      (("#include \"opus\\.h\"") "#include <opus/opus.h>")
+      (("#include \"opus_custom\\.h\"") "#include <opus/opus_custom.h>")
+      (("#include \"opus_defines\\.h\"") "#include <opus/opus_defines.h>")
+      (("#include \"opus_multistream\\.h\"") "#include <opus/opus_multistream.h>")
+      (("#include \"opus_types\\.h\"") "#include <opus/opus_types.h>"))))
+
+          (add-before 'configure 'prepare-build-environment
+            (lambda* (#:key inputs native-inputs #:allow-other-keys)
+              (setenv "AR" "llvm-ar")
+              (setenv "NM" "llvm-nm")
+              (setenv "CC" "clang")
+              (setenv "CXX" "clang++")
+              (setenv "PYTHONDONTWRITEBYTECODE" "1")
+
+              (let ((node (search-input-file (or native-inputs inputs) "/bin/node")))
+                (mkdir-p "third_party/node/linux/node-linux-x64")
+                (symlink (dirname node)
+                         "third_party/node/linux/node-linux-x64/bin"))))
+
+          (replace 'configure
+            (lambda* (#:key configure-flags #:allow-other-keys)
+              (invoke "gn" "gen" "out/Release"
+                      (string-append "--args=" (string-join configure-flags " ")))))
+
+          (replace 'build
+            (lambda* (#:key (parallel-build? #t) #:allow-other-keys)
+              (invoke "ninja" "-C" "out/Release"
+                      "-j" (if parallel-build?
+                               (number->string (parallel-job-count))
+                               "1")
+                      "chrome" "chrome_sandbox" "chromedriver")))
+
+          (replace 'install
+            (lambda* (#:key outputs #:allow-other-keys)
+              (let* ((out (assoc-ref outputs "out"))
+                     (lib (string-append out "/lib"))
+                     (bin (string-append out "/bin"))
+                     (res (string-append lib "/chromium")))
+
+                (install-file "out/Release/chrome" bin)
+                (rename-file (string-append bin "/chrome")
+                            (string-append bin "/chromium"))
+
+                (install-file "out/Release/chromedriver" bin)
+                (install-file "out/Release/chrome_sandbox" bin)
+                (rename-file (string-append bin "/chrome_sandbox")
+                            (string-append bin "/chrome-sandbox"))
+
+                (mkdir-p res)
+                (copy-recursively "out/Release/resources"
+                                  (string-append res "/resources"))
+                (copy-recursively "out/Release/locales"
+                                  (string-append res "/locales"))
+
+                (for-each (lambda (file) (install-file file res))
+                          (find-files "out/Release" "\\.pak$"))
+
+                (for-each (lambda (file) (install-file file res))
+                          (find-files "out/Release" "\\.so$"))
+
+                (install-file "out/Release/chrome_crashpad_handler" res)
+                (install-file "out/Release/v8_context_snapshot.bin" res)
+
+                (let ((swift-target (string-append res "/swiftshader")))
+                  (mkdir-p swift-target)
+                  (for-each (lambda (file) (install-file file swift-target))
+                            (find-files "out/Release/swiftshader" "\\.so$")))
+
+                (wrap-program (string-append bin "/chromium")
+                  `("LD_LIBRARY_PATH" ":" prefix
+                    (,(string-append res ":" res "/swiftshader"))))))))))
+    (native-inputs
+     (list bison
+           clang
+           gn
+           gperf
+           lld-wrapper
+           ninja
+           node-lts
+           pkg-config
+           python-beautifulsoup4
+           python-html5lib
+           python-wrapper
+           rust
+           which
+           zstd))
+    (inputs
+     (list alsa-lib
+           at-spi2-core
+           cups
+           dbus
+           ffmpeg
+           flac
+           fontconfig
+           freetype
+           glib
+           gtk+
+           harfbuzz
+           icu4c
+           libdrm
+           libffi
+           libjpeg-turbo
+           libpng
+           libva
+           libvpx
+           libwebp
+           libx11
+           libxrandr
+           libxml2
+           libxslt
+           mesa
+           nspr
+           nss
+           openh264
+           openjpeg
+           opus+custom
+           pango
+           pulseaudio
+           re2
+           snappy
+           vulkan-headers
+           vulkan-loader
+           zlib))
+    (synopsis "Ungoogled Chromium web browser")
+    (description "Ungoogled-Chromium is the Chromium web browser, with patches
+to remove Google integration and enhance privacy.")
+    (home-page "https://github.com/ungoogled-software/ungoogled-chromium")
+    (license license:bsd-3)))
+
+ungoogled-chromium
+
+```
+
+giaox-channel/giaox/services/file-organizer.scm
+```scm
+(define-module (giaox services file-organizer)
+ #:use-module (gnu home services)
+ #:use-module (gnu home services shepherd)
+ #:use-module (gnu services configuration)
+ #:use-module (guix gexp)
+ #:use-module (guix records)
+ #:use-module (ice-9 match)
+ #:use-module (srfi srfi-1)
+ #:export (file-organizer-configuration
+           file-organizer-service-type))
+
+(define-record-type* <file-organizer-configuration>
+ file-organizer-configuration make-file-organizer-configuration
+ file-organizer-configuration?
+ (watch-directories file-organizer-configuration-watch-directories
+  (default '()))
+ (file-types file-organizer-configuration-file-types
+  (default '()))
+ (interval file-organizer-configuration-interval
+  (default 300)))
+
+(define (file-organizer-shepherd-service config)
+ (list (shepherd-service
+  (provision '(file-organizer))
+  (documentation "Run file organizer service.")
+  (start #~(make-forkexec-constructor
+   (list #$(file-append shepherd "/bin/shepherd")
+    "start" "file-organizer")))
+  (stop #~(make-kill-destructor)))))
+
+(define (file-organizer-activation config)
+ #~(begin
+    (use-modules (ice-9 threads))
+    (define (get-file-type file-name file-types)
+     (let ((extension (string-downcase (file-extension file-name))))
+      (find (lambda (type)
+             (member extension (cdr type)))
+            file-types)))
+    (define (move-file source dest)
+     (let ((dir (dirname dest)))
+      (unless (file-exists? dir)
+       (mkdir-p dir))
+      (rename-file source dest)))
+    (define (organize-files source-dir file-types)
+     (let ((files (scandir source-dir)))
+      (for-each
+       (lambda (file)
+        (let* ((full-path (string-append source-dir "/" file))
+               (file-type (and (file-regular? full-path)
+                               (get-file-type file file-types))))
+         (when file-type
+          (let ((dest-dir (car (cdr file-type))))
+           (move-file full-path (string-append dest-dir "/" file))))))
+       files)))
+    (define (watch-and-organize config)
+     (let ((watch-dirs #$(file-organizer-configuration-watch-directories config))
+           (file-types #$(file-organizer-configuration-file-types config))
+           (interval #$(file-organizer-configuration-interval config)))
+      (let loop ()
+       (for-each (lambda (dir) (organize-files dir file-types)) watch-dirs)
+       (sleep interval)
+       (loop))))
+    (call-with-new-thread
+     (lambda ()
+      (watch-and-organize #$config)))))
+
+(define file-organizer-service-type
+  (service-type
+   (name 'file-organizer)
+   (description "Run file organizer service.")
+   (extensions
+    (list (service-extension
+           home-shepherd-service-type
+           file-organizer-shepherd-service)
+          (service-extension
+           home-activation-service-type
+           file-organizer-activation)))
+   (default-value (file-organizer-configuration))
+   (compose identity)
+   (extend
+    (lambda (config extra-config)
+      (file-organizer-configuration
+       (watch-directories
+        (append (file-organizer-configuration-watch-directories config)
+                (file-organizer-configuration-watch-directories extra-config)))
+       (file-types
+        (append (file-organizer-configuration-file-types config)
+                (file-organizer-configuration-file-types extra-config)))
+       (interval
+        (or (file-organizer-configuration-interval extra-config)
+            (file-organizer-configuration-interval config))))))))
+
+```
+
+giaox-channel/giaox/services/lsfg-vk.scm
+```scm
+(define-module (giaox services lsfg-vk)
+  #:use-module (giaox packages lsfg-vk)
+  #:use-module (gnu home services)
+  #:use-module (gnu services)
+  #:use-module (guix records)
+  #:export (lsfg-vk-configuration
+            lsfg-vk-configuration?
+            lsfg-vk-configuration-package
+            home-lsfg-vk-service-type))
+
+;; Shared configuration record; see documents/lsfg-vk.txt D8.
+(define-record-type* <lsfg-vk-configuration>
+  lsfg-vk-configuration make-lsfg-vk-configuration
+  lsfg-vk-configuration?
+  (package lsfg-vk-configuration-package
+           (default lsfg-vk)))
+
+(define (lsfg-vk-profile-packages config)
+  (list (lsfg-vk-configuration-package config)))
+
+(define home-lsfg-vk-service-type
+  (service-type
+   (name 'home-lsfg-vk)
+   (extensions
+    (list (service-extension home-profile-service-type
+                             lsfg-vk-profile-packages)))
+   (default-value (lsfg-vk-configuration))
+   (description
+    "Install lsfg-vk, a Vulkan layer providing Lossless Scaling frame
+generation, into the home profile.  With the default configuration this is all
+it does; configuration-file management is opt-in.")))
+```
