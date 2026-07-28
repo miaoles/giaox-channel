@@ -392,233 +392,247 @@ the rule."
 ;;; old generation is $GUIX_OLD_HOME and nothing else (C10).
 ;;;
 
-(define (provisioned-files-activation config)
+(define (provisioned-files-activation-program config)
+  "Return a program-file that reconciles CONFIG against the previous
+generation's manifest.  Its TOP LEVEL is a real top level, which is the whole
+reason it exists; see provisioned-files-activation."
   (let ((records (provisioned-files-records config)))
-    (with-imported-modules (source-module-closure '((guix build utils)))
-      #~(begin
-          (use-modules (guix build utils)
-                       (ice-9 binary-ports)
-                       (ice-9 match)
-                       (srfi srfi-1))
+    (program-file
+     "provisioned-files-activate"
+     (with-imported-modules (source-module-closure '((guix build utils)))
+       #~(begin
+           (use-modules (guix build utils)
+                        (ice-9 binary-ports)
+                        (ice-9 match)
+                        (srfi srfi-1))
 
-          (define %version #$%manifest-version)
-          (define %records '#$records)
-          (define %home (getenv "HOME"))
-          (define %old-home (or (getenv "GUIX_OLD_HOME")
-                                "/gnu/store/non-existing-generation"))
-          (define %backup-directory
-            (string-append %home "/" (number->string (current-time))
-                           "-provisioned-files-backup"))
+           (define %version #$%manifest-version)
+           (define %records '#$records)
+           (define %home (getenv "HOME"))
+           (define %old-home (or (getenv "GUIX_OLD_HOME")
+                                 "/gnu/store/non-existing-generation"))
+           (define %backup-directory
+             (string-append %home "/" (number->string (current-time))
+                            "-provisioned-files-backup"))
 
-          (define (say format-string . arguments)
-            (apply format #t
-                   (string-append "provisioned-files: " format-string "~%")
-                   arguments))
+           (define (say format-string . arguments)
+             (apply format #t
+                    (string-append "provisioned-files: " format-string "~%")
+                    arguments))
 
-          (define (expand path)
-            (cond ((string=? path "~") %home)
-                  ((string-prefix? "~/" path)
-                   (string-append %home "/" (substring path 2)))
-                  (else path)))
+           (define (expand path)
+             (cond ((string=? path "~") %home)
+                   ((string-prefix? "~/" path)
+                    (string-append %home "/" (substring path 2)))
+                   (else path)))
 
-          (define (lstat* path) (false-if-exception (lstat path)))
+           (define (lstat* path) (false-if-exception (lstat path)))
 
-          (define (file-type* path)
-            (let ((st (lstat* path)))
-              (and st (stat:type st))))
+           (define (file-type* path)
+             (let ((st (lstat* path)))
+               (and st (stat:type st))))
 
-          (define (device-of path) (stat:dev (stat path)))
+           (define (device-of path) (stat:dev (stat path)))
 
-          (define (temp-path target)
-            (string-append (dirname target) "/"
-                           #$%temp-file-prefix (basename target)))
+           (define (temp-path target)
+             (string-append (dirname target) "/"
+                            #$%temp-file-prefix (basename target)))
 
-          (define (regular-source! source)
-            (let ((st (false-if-exception (stat source))))
-              (cond ((not st)
-                     (error "provisioned-files: source does not exist" source))
-                    ((not (eq? (stat:type st) 'regular))
-                     (error "provisioned-files: V7: source is not a regular file"
-                            source))
-                    (else #t))))
+           (define (regular-source! source)
+             (let ((st (false-if-exception (stat source))))
+               (cond ((not st)
+                      (error "provisioned-files: source does not exist" source))
+                     ((not (eq? (stat:type st) 'regular))
+                      (error "provisioned-files: V7: source is not a regular file"
+                             source))
+                     (else #t))))
 
-          ;; Every precondition an entry has, asserted before the first
-          ;; destructive call on its behalf (S10).  TARGET's parent exists.
-          (define (assert-source! method target source)
-            (case method
-              ((copy) (regular-source! source))
-              ((hard-link)
-               (regular-source! source)
-               (let ((canonical (canonicalize-path source)))
-                 (unless (= (device-of canonical) (device-of (dirname target)))
-                   (error "provisioned-files: S9: hard link across filesystems"
-                          canonical target))))
-              (else #t)))
+           ;; Every precondition an entry has, asserted before the first
+           ;; destructive call on its behalf (S10).  TARGET's parent exists.
+           (define (assert-source! method target source)
+             (case method
+               ((copy) (regular-source! source))
+               ((hard-link)
+                (regular-source! source)
+                (let ((canonical (canonicalize-path source)))
+                  (unless (= (device-of canonical) (device-of (dirname target)))
+                    (error "provisioned-files: S9: hard link across filesystems"
+                           canonical target))))
+               (else #t)))
 
-          (define (files-equal? target source)
-            (let ((ts (lstat* target))
-                  (ss (false-if-exception (stat source))))
-              (and ts ss
-                   (eq? (stat:type ts) 'regular)
-                   (eq? (stat:type ss) 'regular)
-                   (= (stat:size ts) (stat:size ss))
-                   (call-with-input-file target
-                     (lambda (target-port)
-                       (call-with-input-file source
-                         (lambda (source-port)
-                           (let loop ()
-                             (let ((a (get-bytevector-n target-port 65536))
-                                   (b (get-bytevector-n source-port 65536)))
-                               (cond ((and (eof-object? a) (eof-object? b)) #t)
-                                     ((or (eof-object? a) (eof-object? b)) #f)
-                                     ((equal? a b) (loop))
-                                     (else #f)))))
-                         #:binary #t))
-                     #:binary #t))))
+           (define (files-equal? target source)
+             (let ((ts (lstat* target))
+                   (ss (false-if-exception (stat source))))
+               (and ts ss
+                    (eq? (stat:type ts) 'regular)
+                    (eq? (stat:type ss) 'regular)
+                    (= (stat:size ts) (stat:size ss))
+                    (call-with-input-file target
+                      (lambda (target-port)
+                        (call-with-input-file source
+                          (lambda (source-port)
+                            (let loop ()
+                              (let ((a (get-bytevector-n target-port 65536))
+                                    (b (get-bytevector-n source-port 65536)))
+                                (cond ((and (eof-object? a) (eof-object? b)) #t)
+                                      ((or (eof-object? a) (eof-object? b)) #f)
+                                      ((equal? a b) (loop))
+                                      (else #f)))))
+                          #:binary #t))
+                      #:binary #t))))
 
-          ;; The shape test of S3, per method.  `hard-link' is identity, not
-          ;; content: one inode on one device.  `stat' follows, matching what
-          ;; create! linked after canonicalisation.
-          (define (matches? method target source)
-            (case method
-              ((symlink)
-               (and (eq? (file-type* target) 'symlink)
-                    (string=? (readlink target) source)))
-              ((copy) (files-equal? target source))
-              ((hard-link)
-               (let ((ts (lstat* target))
-                     (ss (false-if-exception (stat source))))
-                 (and ts ss
-                      (= (stat:dev ts) (stat:dev ss))
-                      (= (stat:ino ts) (stat:ino ss)))))
-              (else #f)))
+           ;; The shape test of S3, per method.  `hard-link' is identity, not
+           ;; content: one inode on one device.  `stat' follows, matching what
+           ;; create! linked after canonicalisation.
+           (define (matches? method target source)
+             (case method
+               ((symlink)
+                (and (eq? (file-type* target) 'symlink)
+                     (string=? (readlink target) source)))
+               ((copy) (files-equal? target source))
+               ((hard-link)
+                (let ((ts (lstat* target))
+                      (ss (false-if-exception (stat source))))
+                  (and ts ss
+                       (= (stat:dev ts) (stat:dev ss))
+                       (= (stat:ino ts) (stat:ino ss)))))
+               (else #f)))
 
-          (define (remove! target)
-            (if (eq? (file-type* target) 'directory)
-                (delete-file-recursively target)
-                (delete-file target)))
-
-          ;; create! owns replacement: symlink(2) and link(2) refuse an
-          ;; existing name, and rename(2) replaces atomically, so a failed copy
-          ;; leaves the old content intact rather than a hole.  link(2) does
-          ;; not dereference a symlink, hence canonicalize-path.
-          (define (create! method target source permissions)
-            (assert-source! method target source)
-            (case method
-              ((symlink)
-               (when (lstat* target) (remove! target))
-               (symlink source target))
-              ((copy)
-               (let ((temporary (temp-path target)))
-                 (when (lstat* temporary) (remove! temporary))
-                 (copy-file source temporary)
-                 (chmod temporary (or permissions #$%default-permissions))
-                 (rename-file temporary target)))
-              ((hard-link)
-               (when (lstat* target) (remove! target))
-               (link (canonicalize-path source) target))
-              (else
-               (error "provisioned-files: unknown method" method))))
-
-          (define (store-symlink? target)
-            (and (eq? (file-type* target) 'symlink)
-                 (string-prefix? "/gnu/store/" (readlink target))))
-
-          (define (backup! target)
-            (let* ((prefix (string-append %home "/"))
-                   (relative (if (string-prefix? prefix target)
-                                 (substring target (string-length prefix))
-                                 (substring target 1)))
-                   (destination (string-append %backup-directory "/" relative)))
-              (mkdir-p (dirname destination))
-              (case (file-type* target)
-                ((symlink) (symlink (readlink target) destination)
-                           (delete-file target))
-                ((directory) (copy-recursively target destination)
-                             (delete-file-recursively target))
-                (else
-                 ;; A hard link preserves the inode at no cost; copy only when
-                 ;; the backup directory is on another filesystem (S4).
-                 (if (= (device-of target) (device-of (dirname destination)))
-                     (link target destination)
-                     (copy-file target destination))
+           (define (remove! target)
+             (if (eq? (file-type* target) 'directory)
+                 (delete-file-recursively target)
                  (delete-file target)))
-              (say "backed up ~a to ~a" target destination)))
 
-          (define (read-manifest directory)
-            (let ((file (string-append directory "/" #$%manifest-name)))
-              (if (file-exists? file)
-                  (match (call-with-input-file file read)
-                    (('provisioned-files ('version version) ('files records))
-                     (unless (= version %version)
-                       (error "provisioned-files: C7: unrecognised manifest version"
-                              version file))
-                     records)
-                    (_ (error "provisioned-files: C7: malformed manifest" file)))
-                  '())))
+           ;; create! owns replacement: symlink(2) and link(2) refuse an
+           ;; existing name, and rename(2) replaces atomically, so a failed copy
+           ;; leaves the old content intact rather than a hole.  link(2) does
+           ;; not dereference a symlink, hence canonicalize-path.
+           (define (create! method target source permissions)
+             (assert-source! method target source)
+             (case method
+               ((symlink)
+                (when (lstat* target) (remove! target))
+                (symlink source target))
+               ((copy)
+                (let ((temporary (temp-path target)))
+                  (when (lstat* temporary) (remove! temporary))
+                  (copy-file source temporary)
+                  (chmod temporary (or permissions #$%default-permissions))
+                  (rename-file temporary target)))
+               ((hard-link)
+                (when (lstat* target) (remove! target))
+                (link (canonicalize-path source) target))
+               (else
+                (error "provisioned-files: unknown method" method))))
 
-          (define (target-of record) (car record))
+           (define (store-symlink? target)
+             (and (eq? (file-type* target) 'symlink)
+                  (string-prefix? "/gnu/store/" (readlink target))))
 
-          (define (ours? record target)
-            (match record
-              ((_ _ method _ _ _ source)
-               (matches? method target (expand source)))))
+           (define (backup! target)
+             (let* ((prefix (string-append %home "/"))
+                    (relative (if (string-prefix? prefix target)
+                                  (substring target (string-length prefix))
+                                  (substring target 1)))
+                    (destination (string-append %backup-directory "/" relative)))
+               (mkdir-p (dirname destination))
+               (case (file-type* target)
+                 ((symlink) (symlink (readlink target) destination)
+                            (delete-file target))
+                 ((directory) (copy-recursively target destination)
+                              (delete-file-recursively target))
+                 (else
+                  ;; A hard link preserves the inode at no cost; copy only when
+                  ;; the backup directory is on another filesystem (S4).
+                  (if (= (device-of target) (device-of (dirname destination)))
+                      (link target destination)
+                      (copy-file target destination))
+                  (delete-file target)))
+               (say "backed up ~a to ~a" target destination)))
 
-          (define (collect! old new-targets)
-            (for-each
-             (lambda (record)
-               (match record
-                 ((target root method policy permissions kind source)
-                  (when (and (eq? policy 'enforce)
-                             (not (member target new-targets string=?)))
-                    (let ((t (expand target)))
-                      (cond ((not (lstat* t)) #t)
-                            ((ours? record t)
-                             (remove! t)
-                             (let ((temporary (temp-path t)))
-                               (when (lstat* temporary) (remove! temporary)))
-                             (say "collected ~a" t))
-                            (else
-                             (say "kept, modified since provisioned: ~a" t))))))))
-             old))
+           (define (read-manifest directory)
+             (let ((file (string-append directory "/" #$%manifest-name)))
+               (if (file-exists? file)
+                   (match (call-with-input-file file read)
+                     (('provisioned-files ('version version) ('files records))
+                      (unless (= version %version)
+                        (error "provisioned-files: C7: unrecognised manifest version"
+                               version file))
+                      records)
+                     (_ (error "provisioned-files: C7: malformed manifest" file)))
+                   '())))
 
-          (define (materialise! records old)
-            (for-each
-             (lambda (record)
-               (match record
-                 ((target root method policy permissions kind source)
-                  (let* ((t (expand target))
-                         (s (expand source))
-                         (previous (find (lambda (r)
-                                           (string=? (target-of r) target))
-                                         old)))
-                    (mkdir-p (dirname t))
-                    (cond
-                     ((matches? method t s) #t)              ; ALREADY
-                     ((eq? policy 'seed)                     ; never clobbers
-                      (unless (lstat* t)
-                        (create! method t s permissions)
-                        (say "seeded ~a" t)))
-                     ((not (lstat* t))                       ; ABSENT
-                      (create! method t s permissions)
-                      (say "created ~a" t))
-                     ((and previous (ours? previous t))      ; OURS
-                      (create! method t s permissions)
-                      (say "updated ~a" t))
-                     (else                                   ; FOREIGN
-                      (when (store-symlink? t)
-                        (error (string-append
-                                "provisioned-files: S2: " t
-                                " is a symlink into the store; home-files owns it")))
-                      (assert-source! method t s)
-                      (backup! t)
-                      (create! method t s permissions)
-                      (say "created ~a" t)))))))
-             records))
+           (define (target-of record) (car record))
 
-          (let ((old (read-manifest %old-home)))
-            (collect! old (map target-of %records))
-            (materialise! %records old))))))
+           (define (ours? record target)
+             (match record
+               ((_ _ method _ _ _ source)
+                (matches? method target (expand source)))))
+
+           (define (collect! old new-targets)
+             (for-each
+              (lambda (record)
+                (match record
+                  ((target root method policy permissions kind source)
+                   (when (and (eq? policy 'enforce)
+                              (not (member target new-targets string=?)))
+                     (let ((t (expand target)))
+                       (cond ((not (lstat* t)) #t)
+                             ((ours? record t)
+                              (remove! t)
+                              (let ((temporary (temp-path t)))
+                                (when (lstat* temporary) (remove! temporary)))
+                              (say "collected ~a" t))
+                             (else
+                              (say "kept, modified since provisioned: ~a" t))))))))
+              old))
+
+           (define (materialise! records old)
+             (for-each
+              (lambda (record)
+                (match record
+                  ((target root method policy permissions kind source)
+                   (let* ((t (expand target))
+                          (s (expand source))
+                          (previous (find (lambda (r)
+                                            (string=? (target-of r) target))
+                                          old)))
+                     (mkdir-p (dirname t))
+                     (cond
+                      ((matches? method t s) #t)              ; ALREADY
+                      ((eq? policy 'seed)                     ; never clobbers
+                       (unless (lstat* t)
+                         (create! method t s permissions)
+                         (say "seeded ~a" t)))
+                      ((not (lstat* t))                       ; ABSENT
+                       (create! method t s permissions)
+                       (say "created ~a" t))
+                      ((and previous (ours? previous t))      ; OURS
+                       (create! method t s permissions)
+                       (say "updated ~a" t))
+                      (else                                   ; FOREIGN
+                       (when (store-symlink? t)
+                         (error (string-append
+                                 "provisioned-files: S2: " t
+                                 " is a symlink into the store; home-files owns it")))
+                       (assert-source! method t s)
+                       (backup! t)
+                       (create! method t s permissions)
+                       (say "created ~a" t)))))))
+              records))
+
+           (let ((old (read-manifest %old-home)))
+             (collect! old (map target-of %records))
+             (materialise! %records old)))))))
+
+;; compute-activation-script splices extension gexps into a NESTED body, where
+;; `use-modules' cannot introduce a MACRO for the forms that follow it — the
+;; expander sees (match …) as an application and chokes on `_'.  Load a
+;; program-file instead: its top level is a real top level.  primitive-load
+;; stays in this process, so the wrapper's GUIX_OLD_HOME is still in scope.
+;; home-symlink-manager does the same.  See documents/provisioned-files.txt D10.
+(define (provisioned-files-activation config)
+  #~(primitive-load #$(provisioned-files-activation-program config)))
 
 
 ;;;

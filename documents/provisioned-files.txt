@@ -34,9 +34,9 @@ OWNERSHIP
         roots: a root is a fact about a user's machine.
 
     CONFIGURATION   giaox: home/main.scm
-        The roots.  The provisioned files.  GUIX_SANDBOX_HOME, derived
-        from the root rather than written a second time.  Untouched until
-        Phase 5 (D9).
+        The roots.  The provisioned files, machine-dispatched.
+        GUIX_SANDBOX_HOME, derived from the root rather than written a
+        second time.
 
     NOT OWNED, DELIBERATELY
         Nothing extends this service from inside the channel.  compose and
@@ -188,7 +188,7 @@ VALIDATION RULES — loud, with the rule's identifier in the message
         source that is a directory aborts, as does one that does not
         exist.  A <live-file> source need not exist when the configuration
         is evaluated — the sandbox may not yet — so its type cannot be
-        known then.  See D6.
+        known then.  See D6 and L10.
 
     Both run inside assert-source!, which every destructive branch calls
     BEFORE its first destructive step (S10).
@@ -228,8 +228,9 @@ SAFETY INVARIANTS — activation time
         target's parent.  A regular target is moved by HARD LINK when the
         backup directory is on its filesystem, and copied only when it is
         not — so a backup preserves the inode at zero cost, which is what
-        makes L9 affordable.  Never overwritten: link(2) on an existing
-        name fails loudly.
+        makes L9 affordable.  VERIFIED: the backup's inode equals the
+        replaced file's.  Never overwritten: link(2) on an existing name
+        fails loudly.
     S5  `copy' IS ATOMIC AND LEAVES NO RESIDUE TO SWEEP.  Content is
         written to a sibling whose name is DETERMINISTIC,
         ".provisioned-files-tmp-<basename>", then chmod'ed, then renamed
@@ -317,7 +318,8 @@ OWNERSHIP AND GENERATIONS
 
     C9  The manifest is emitted EVEN WHEN `files' IS EMPTY, so that "the
         service is present with nothing to do" is distinguishable from
-        "the service is absent".
+        "the service is absent".  This is also what made Step 5.1 a safe
+        gate: an empty manifest, in a real generation, is perfectly inert.
 
     C10 THE OLD GENERATION IS $GUIX_OLD_HOME, AND ONLY THAT.  The
         activation wrapper — compute-activation-script in
@@ -406,14 +408,14 @@ DECISIONS
         says the manifest is a complete description, never a delta;
         therefore ANY pair of manifests is a legal (old, new), and a
         roll-back or a switch-generation leap of arbitrary distance is
-        nothing but a choice of $GUIX_OLD_HOME.  Phases 2 through 4 are
+        nothing but a choice of $GUIX_OLD_HOME.  Phases 2 through 4 were
         exercised by lowering the activation gexp to a program-file and
         running it with GUIX_OLD_HOME pointed at a manifest of our
         choosing, against a probe root under ~/.cache.  This is strictly
         stronger than a `guix home reconfigure' — it controls both
         manifests, it reproduces leaps that would otherwise require real
         generations, and it puts nothing real at risk — and it is why
-        home/main.scm is untouched until Phase 5.  The property that
+        home/main.scm was untouched until Phase 5.  The property that
         deleted the ledger also deleted the need to reconfigure in order
         to test.
 
@@ -426,7 +428,16 @@ PHASE ORDER
         5.3  machine dispatch in home/main.scm              giaox repository
         5.4  conf.toml, symlink + hard-link                 needs 5.3
 
-    Step 5.2 is deliberately first among the adoptions: it is
+    Step 5.1 ships ALONE: the first generation to carry a manifest carries
+    an EMPTY one.  It is the first time the activation script runs inside
+    a real reconfigure, subject to the real wrapper, the real
+    GUIX_OLD_HOME, and the real fold-services ordering against the symlink
+    manager.  If any of that is wrong it must be wrong with zero files at
+    risk.  It remains a GATE even when 5.2 through 5.4 are bundled: the
+    reconfigure is run once with (files '()) before the entries are
+    placed.
+
+    Step 5.2 is deliberately first among the file adoptions: it is
     dependency-free, it touches no git-tracked file, it costs zero bytes,
     and it proves the namespace-invariant path (I13 of lsfg-vk.txt) BEFORE
     any configuration file comes to rely on it.  Step 5.3 is
@@ -476,6 +487,22 @@ ACCEPTED LIMITATIONS
         what it costs is one dated directory under $HOME per such
         activation.  A `seed' hard link in the same situation is left
         pointing at the old inode, which is precisely what `seed' means.
+
+    L10 A `hard-link' ENTRY ASSERTS ITS SOURCE EXISTS (V7).  Declaring one
+        on a machine where the source is absent aborts the reconfigure.
+        The rule is not to be softened: `hard-link' means "this file
+        exists and I want a second name for it".  The remedy is machine
+        dispatch.  Hence home/main.scm provisions lsfg-vk's files on the
+        laptop only; the desktop has no proven Lossless Scaling
+        installation and no authored conf.toml, and gets (files '()).
+        Retired by one line when both are settled.
+
+    L11 home/main.scm and system/main.scm each carry their own copy of the
+        machine-id dispatch table.  Two hex constants.  Merged into a
+        shared machines/dispatch.scm the next time system/main.scm is
+        touched for any reason; doing it now would require a full
+        `guix system build' on a freshly bumped channel set, which means
+        rebuilding a custom kernel to prove that a `define' compiles.
 
 DISCOVERY RESULTS
     M1  --share=$GUIX_SANDBOX_HOME=$HOME.  Read from the deployed
@@ -604,6 +631,21 @@ VERIFICATION LESSONS
       * Guile's ";;; note: source file … newer than compiled …" is a NOTE,
         not a warning.  A bucket grepping for `warning' will not see it,
         and should not.
+      * AN INODE CAPTURED BEFORE A MUTATION DOES NOT DESCRIBE THE FILE THE
+        MUTATION PRODUCED.  "The replaced target's inode" must be read
+        AFTER the replacement, or the check proves nothing.  Inode reuse
+        then makes the wrong check look plausible: a freed inode is handed
+        straight back to the next file created.
+      * `cmd | sed … || echo "<ABSENT>"' CAN NEVER FIRE.  `||' binds to the
+        PIPELINE, whose status is the last command's.  Guard with an
+        explicit `if [ -e … ]'.
+      * `grep -c PATTERN missing-file 2>/dev/null' prints NOTHING to
+        stdout.  A check that labels its output with `sed' then labels
+        nothing.  Test for the file first.
+      * `guix describe' prints "  giaox 21a2212".  An anchor of `giaox$'
+        matches no line.  Three checks in one bucket concealed the fact
+        that `guix home reconfigure' had never been run; the empty
+        manifest of Step 5.1 is the only reason nothing was at stake.
 
 OPEN ITEMS
     All closed.  O1 (M6), O2/O2a (M7, M10, M13), O3 (M9), O4 (PHASE
@@ -660,55 +702,62 @@ COMPLETION ✓
 
 :: PHASE 4. HARD-LINK
 ================================================================================
-    - Step 4.1: `hard-link' × {seed, enforce}.
-        * matches? compares (st_dev, st_ino); create! canonicalises before
-          link(2) (M15); V2/S9's device check compares the canonicalised
-          source with the target's PARENT, inside assert-source! (S10).
-        * backup! moves a regular target by hard link when it can (S4),
-          which is what makes L9 cost zero bytes.
-        * The IMPL guard and %implemented-methods are deleted (D5).
-        Test: one inode across every provisioned name, and the link count
-        to prove it.  A target replaced by a byte-identical COPY is still
-        FOREIGN and is re-linked — identity, not content.  A source
-        rewritten by rename, as git and Steam do: `enforce' re-links both
-        roots and the backup holds the old content, while the `seed' name
-        keeps the old inode and the old bytes (L9, C6).  Dropped while
-        stale -> kept and warned (C4); dropped while clean -> collected,
-        and the emptied directory survives (S7).  A cross-device target
-        aborts naming both paths; a directory source aborts.
-COMPLETION ☐
+    - Step 4.1: `hard-link' × {seed, enforce}: (st_dev, st_ino) identity,
+      canonicalize-path before link(2) (M15), V2/S9's device check inside
+      assert-source! (S10), backup! by hard link (S4).  The IMPL guard and
+      %implemented-methods deleted (D5).
+        Verified: three provisioned names and the source share one inode,
+        links=4.  A target replaced by a byte-identical COPY is FOREIGN
+        and is re-linked — identity, not content.  A source rewritten by
+        rename, as git and Steam do: `enforce' re-links both roots, the
+        backup holds the old content, and the `seed' name keeps the old
+        inode and the old bytes (L9, C6).  Dropped while stale -> two
+        `kept, modified' lines, nothing removed (C4); dropped while clean
+        -> two `collected', source links back to 2, and the emptied
+        directory survives (S7).  A cross-device target aborts naming both
+        paths (dev 64768 vs 29); a directory source aborts.
+        S4's "links, never copies" was re-proved separately: the backup's
+        inode equals the foreign file's, read AFTER the replacement.
+COMPLETION ✓
 
 :: PHASE 5. ADOPTION
 ================================================================================
-    From here the channel must be pushed and pulled: home/main.scm imports
-    the module, and a deployed `guix home reconfigure' resolves it from
-    the PULLED revision, not from -L (lsfg-vk.txt I6, I9).
+    The channel is pushed and pulled: home/main.scm imports the module,
+    and a deployed `guix home reconfigure' resolves it from the PULLED
+    revision (lsfg-vk.txt I6, I9).  Verified by a pull that built
+    giaox 21a2212 inside the channel derivation.
 
-    - Step 5.1: home/main.scm gains %steam-sandbox, derives
-      GUIX_SANDBOX_HOME from it with root-shell-path, and instantiates the
-      service with (files '()).  It ships ALONE: the first real generation
-      to carry a manifest carries an empty one.
-        Test: home builds; ~/.guix-home/provisioned-files exists and is
-        (files ()); GUIX_SANDBOX_HOME is byte-identical to its previous
+    - Step 5.1: %steam-sandbox; GUIX_SANDBOX_HOME derived with
+      root-shell-path; the service with (files '()).  A GATE: run first,
+      alone, before any entry is placed.
+        Test: ~/.guix-home/provisioned-files reads
+        (provisioned-files (version 1) (files ())); the activation prints
+        nothing; GUIX_SANDBOX_HOME is byte-identical to its previous
         value.
     - Step 5.2: Lossless.dll.  hard-link/enforce, source
       (live-file (root 'steam-sandbox) (path ".local/share/Steam/…")),
       target ".local/share/lsfg-vk/Lossless.dll", roots
-      '(home steam-sandbox).  No machine dispatch, no git-tracked file, no
-      GUI, zero bytes.
-        Test: three names, one inode.  The host's lsfg-vk-cli finds the
-        DLL at the namespace-invariant path; a Steam game does too, with
-        the same `dll' string in its own conf.toml.  This proves I13 of
-        lsfg-vk.txt before any configuration rides on it.
-    - Step 5.3: Machine dispatch in home/main.scm.  This is
-      documents/lsfg-vk.txt Step 5.1 and lives in the giaox repository.
-    - Step 5.4: conf.toml.  It moves into the configuration repository
-      under machine dispatch; symlink/enforce at
+      '(home steam-sandbox).
+        Test: three names, one inode, links=3, zero additional bytes.  The
+        `dll' key of conf.toml — one absolute string — resolves on the
+        host AND at the path the container will see, because inside the
+        container $HOME is the sandbox home.  That is I13 of lsfg-vk.txt,
+        measured rather than argued.
+    - Step 5.3: Machine dispatch in home/main.scm, mirroring
+      system/main.scm (L11).  This is documents/lsfg-vk.txt Step 5.1.
+        Test: the p15v branch yields four records; GIAOX_MACHINE=desktop
+        yields (files ()).
+    - Step 5.4: conf.toml, the authority in the configuration repository,
+      machine-dispatched; symlink/enforce at
       home:".config/lsfg-vk/conf.toml"; hard-link/enforce at
       steam-sandbox:".config/lsfg-vk/conf.toml".
-        Test: one inode, three names.  A GUI save changes the bytes seen
-        inside the sandbox with no reconfigure.  A Proton game logs the
-        edited profile.  `guix home roll-back' restores the prior shape.
+        Test: one inode, three names — the repository file, a hard link in
+        the sandbox, and a symlink at the host's hardcoded path.  The two
+        previously divergent files are backed up by hard link and
+        survive.  A second reconfigure is silent (S8).
+        Manual follow-up, not bucket-able: a GUI save changes the bytes
+        seen inside the sandbox with no reconfigure; a Proton game logs
+        the edited profile.
 COMPLETION ☐
 
 :: PHASE 6. RETIREMENT
