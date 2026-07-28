@@ -35,7 +35,8 @@ OWNERSHIP
 
     CONFIGURATION   giaox: home/main.scm
         The roots.  The provisioned files.  GUIX_SANDBOX_HOME, derived
-        from the root rather than written a second time.
+        from the root rather than written a second time.  Untouched until
+        Phase 5 (D9).
 
     NOT OWNED, DELIBERATELY
         Nothing extends this service from inside the channel.  compose and
@@ -139,32 +140,51 @@ KEY INVARIANTS
         path — by provisioning the thing it names at a namespace-invariant
         relative name — never the content.
 
-VALIDATION RULES — evaluation time, loud, with the rule's identifier in
-the message
+VALIDATION RULES — loud, with the rule's identifier in the message
+    EVALUATION TIME, in validate-provisioned-files-configuration:
+
     V1  `hard-link' requires a <live-file> source.  An external hard link
         to a store inode pins its data past `guix gc' and yields a 444
         target.
-    V2  `hard-link' requires source and target on one device.  Declared
-        here, enforced at activation (S9), because a device number is a
-        runtime fact.  Loud failure, never a silent fallback to `copy'.
     V3  `symlink' only where (path R) = (mount R).  See I3.
-    V4  `permissions' only with `copy'.  A hard link shares the source's
-        mode, so setting it would mutate the source; a symlink has none.
-        Supplying it with a link method is an error, not a no-op.
-    V5  TARGETs are root-relative: no leading '/', no '..'.  SOURCE and
-        root PATH are '~'-prefixed or absolute.  "$HOME" is not a path
-        syntax.  Expansion happens at activation, never by `getenv' at
-        evaluation.
+    V4  `permissions' only with `copy', and only #f or an octal mode.  A
+        hard link shares the source's mode, so setting it would mutate the
+        source; a symlink has none.  Supplying it with a link method is an
+        error, not a no-op.
+    V5  TARGETs are clean relative paths: no leading '/', no '~', no '.'
+        or '..' component.  Root PATHs, root MOUNTs and unrooted
+        <live-file> paths are '~'-anchored or absolute.  A rooted
+        <live-file> path is relative.  "$HOME" is not a path syntax.
+        Expansion happens at activation, never by `getenv' at evaluation.
     V6  No two entries may resolve to the same target.  Comparison is on
         the normalised '~'-prefixed absolute path, so two roots that
         overlap — home:"Sandbox/.config/x" and steam-sandbox:".config/x" —
         are caught.
-    V7  Version 1 provisions REGULAR FILES.  A directory source is an
-        error.  See D6.
     V8  An entry's live source may not be any entry's target.  Chains are
         forbidden: nothing needs one, and forbidding them removes both the
         materialisation-ordering problem and the possibility that
         collection deletes a surviving entry's source.
+    V9  `source' is a file-like or a <live-file>.  A bare string is
+        rejected, so "is this content or a path?" is never a question the
+        reader must ask (D7).
+    V10 `method' and `policy' are drawn from their closed enumerations;
+        `roots' is a non-empty, duplicate-free list of symbols; every name
+        it uses is a declared root; no two roots share a name.
+
+    ACTIVATION TIME, because the fact is a runtime fact and no honest
+    check can assert it earlier:
+
+    V2  `hard-link' requires source and target on one device.  Loud
+        failure, never a silent fallback to `copy'.
+    V7  Version 1 provisions REGULAR FILES.  A directory source aborts.  A
+        <live-file> source need not exist when the configuration is
+        evaluated — the sandbox may not yet — so its type cannot be known
+        then.  See D6.
+
+    AND, TEMPORARILY, at evaluation: an entry whose method is not yet
+    implemented refuses to build.  %implemented-methods shrinks the gap by
+    one symbol in each of Phases 3 and 4.  A build-time refusal beats a
+    runtime abort.
 
 SAFETY INVARIANTS — activation time
     S1  BACKUPS APPLY ONLY TO `enforce'.  `seed' never writes over
@@ -173,7 +193,9 @@ SAFETY INVARIANTS — activation time
     S2  The final path component is never followed.  A target that is an
         unrecognised symlink into /gnu/store is a home-files collision:
         ABORT, naming both.  Backing it up would thrash on every
-        reconfigure, because home-files would re-link it.
+        reconfigure, because home-files would re-link it — and the gexps
+        run in `fold-services' order, unspecified relative to the symlink
+        manager (M10), so ordering cannot resolve the conflict either.
     S3  CLASSIFICATION IS FOUR-WAY, against both records:
             ABSENT   nothing there
             OURS     matches the OLD record's declared shape
@@ -186,11 +208,14 @@ SAFETY INVARIANTS — activation time
             copy       byte-identical to the designated source
             hard-link  same inode as the designated source
             symlink    link text equals the designated source path
+        An unimplemented method answers #f, which can only leak (C4).
     S4  BACKUPS go to ~/<timestamp>-provisioned-files-backup/, mirroring
         the target's path relative to $HOME (or its absolute path with the
         leading slash stripped), so targets in different roots cannot
-        collide.  The idiom is home-symlink-manager's own: never
-        overwritten, never aborting.
+        collide.  The idiom is home-symlink-manager's own (M8): a
+        timestamped directory, mkdir-p of the directory and of the
+        target's parent, then a COPY — not a rename, because one
+        filesystem cannot be assumed.  Never overwritten, never aborting.
     S5  `copy' is atomic: a temp sibling with a reserved prefix, then
         rename.  This detaches any hard link made to that target by a
         third party — and that is correct.  `hard-link' is the method for
@@ -208,15 +233,15 @@ SAFETY INVARIANTS — activation time
 OWNERSHIP AND GENERATIONS
     There is NO LEDGER.  The service extends home-service-type with one
     generation-root entry, `provisioned-files', and the activation script
-    reads the PREVIOUS generation's copy through $GUIX_OLD_HOME — which is
-    exactly, line for line, how home-symlink-manager-service-type already
-    knows what to clean up.  All state lives in the store.
+    reads the PREVIOUS generation's copy — which is exactly, line for
+    line, how home-symlink-manager-service-type already knows what to
+    clean up.  All state lives in the store.
 
     C1  The manifest is a STORE ARTIFACT.  It records DECLARATIONS only:
-        target, method, policy, source designation, and the root name as a
-        diagnostic label.  It cannot record inodes, digests or mtimes.
-        Consequence: "did someone modify this?" is answered by comparing
-        the target against the source the OLD RECORD DESIGNATES.
+        target, method, policy, permissions, source designation, and the
+        root name as a diagnostic label.  It cannot record inodes, digests
+        or mtimes.  Consequence: "did someone modify this?" is answered by
+        comparing the target against the source the OLD RECORD DESIGNATES.
 
     C2  Targets in the manifest are fully resolved, '~'-prefixed absolute
         paths.  Root names are compiled away.  Moving or renaming a root
@@ -227,19 +252,20 @@ OWNERSHIP AND GENERATIONS
         provisioned set, never a delta.  Therefore `guix home
         switch-generation' across any distance is correct without
         replaying intermediates, and `roll-back' is a leap of one.  This
-        single property is what makes the ledger unnecessary.
+        single property is what makes the ledger unnecessary — and, by
+        D9, what makes the whole service testable without a reconfigure.
 
     C4  COLLECTION MAY LEAK; IT MAY NEVER DELETE.  Every undecidable case
-        — source vanished, inode drifted, content diverged — leaves the
-        file and warns.
+        — source vanished, inode drifted, content diverged, method not yet
+        implemented — leaves the file and warns.
 
     C5  Recording a store source's path in the manifest text makes that
-        source a REFERENCE of the generation.  The old generation is
-        always alive during activation: it is ~/.guix-home.  The byte
-        comparison C1 forces is therefore always possible for store
-        sources.  For a live source the comparison is against the source
-        AS IT IS NOW: a source that has legitimately changed yields a
-        mismatch, hence a leak, never a deletion.
+        source a REFERENCE of the generation.  VERIFIED (M9).  The old
+        generation is always alive during activation.  The byte comparison
+        C1 forces is therefore always possible for store sources.  For a
+        live source the comparison is against the source AS IT IS NOW: a
+        source that has legitimately changed yields a mismatch, hence a
+        leak, never a deletion.
 
     C6  ONLY `enforce' RECORDS ARE COLLECTED.  A dropped `seed' target is,
         by definition, the application's: left and forgotten.  Deleting a
@@ -261,13 +287,51 @@ OWNERSHIP AND GENERATIONS
         service is present with nothing to do" is distinguishable from
         "the service is absent".
 
+    C10 THE OLD GENERATION IS $GUIX_OLD_HOME, AND ONLY THAT.  The
+        activation wrapper — compute-activation-script in
+        gnu/home/services.scm — reads ~/.guix-home, derives old-home, and
+        setenv's GUIX_OLD_HOME BEFORE splicing in the activation gexps,
+        unsetting it afterwards unless it came from outside (M10).  Our
+        gexp therefore reads it directly and MUST NOT fall back to
+        ~/.guix-home: the symlink manager repoints that link from inside
+        the same gexp sequence, in an order `fold-services' decides, so by
+        the time our gexp runs it may already name the NEW generation
+        (M13).  When there is no old generation the variable is unset; we
+        adopt upstream's own idiom and substitute
+        "/gnu/store/non-existing-generation", whose manifest does not
+        exist, yielding the empty old set (M12).
+
+    C11 The generation-root extension value is a MONADIC name/item pair
+        list, not a bare list (M11).  home-activation-service-type's
+        extension value, by contrast, is a PLAIN GEXP.
+
+MANIFEST FORMAT
+    ~/.guix-home/provisioned-files, a Scheme datum, read with `read':
+
+        (provisioned-files
+          (version 1)
+          (files ((TARGET ROOT METHOD POLICY PERMISSIONS KIND SOURCE) …)))
+
+        TARGET       string, '~'-prefixed or absolute, fully resolved (C2)
+        ROOT         symbol; diagnostic only, it has no semantics (C2)
+        METHOD       copy | hard-link | symlink
+        POLICY       seed | enforce
+        PERMISSIONS  integer or #f
+        KIND         store | live
+        SOURCE       string: a store path (KIND=store), or a '~'-prefixed
+                     or absolute host path (KIND=live)
+
+    The store path appears as a literal string, which is what makes the
+    source a reference of the generation (C5, M9).  The version is checked
+    on every read and an unrecognised one aborts (C7).  Version 1 carries
+    every field Phases 2 through 4 need; no bump is foreseen.
+
 DECISIONS
-    D1  NO LEDGER.  Ownership is generation diffing through
-        GUIX_OLD_HOME/GUIX_NEW_HOME.  Rejected: a state file under
-        $XDG_STATE_HOME — mutable state outside the store, a second source
-        of truth, and wrong under roll-back.  N4's answer is that the most
-        appropriate location for the state of a Guix service is no
-        location.
+    D1  NO LEDGER.  Ownership is generation diffing.  Rejected: a state
+        file under $XDG_STATE_HOME — mutable state outside the store, a
+        second source of truth, and wrong under roll-back.  N4's answer is
+        that the most appropriate location for the state of a Guix service
+        is no location.
 
     D2  NO `absent' MODE.  It contradicts C4's absolute form — never
         delete what you did not create.  Orphan collection covers
@@ -291,11 +355,50 @@ DECISIONS
 
     D6  DIRECTORIES ARE DEFERRED, NOT DESIGNED OUT.  No consumer exists.
         The records do not change when one appears; only the materialiser
-        does.
+        does, and V7 relaxes.
 
     D7  SOURCE PROVENANCE IS A TYPE.  A file-like is the store; a
-        <live-file> is the filesystem.  A bare string is rejected, so "is
-        this content or a path?" is never a question the reader must ask.
+        <live-file> is the filesystem.  A bare string is rejected (V9), so
+        "is this content or a path?" is never a question the reader must
+        ask.
+
+    D8  ALL VALIDATION IN ONE PROCEDURE, none in record sanitisers.  Every
+        rule then has exactly one site and exactly one name, and the
+        cross-field and cross-entry rules — which a per-field sanitiser
+        cannot see — are not second-class.  The service type calls it from
+        both extension procedures, so every `guix home build' validates.
+
+    D9  VERIFY THE ACTIVATION SCRIPT DIRECTLY, NOT BY RECONFIGURING.  C3
+        says the manifest is a complete description, never a delta;
+        therefore ANY pair of manifests is a legal (old, new), and a
+        roll-back or a switch-generation leap of arbitrary distance is
+        nothing but a choice of $GUIX_OLD_HOME.  Phases 2 through 4 are
+        exercised by lowering the activation gexp to a program-file and
+        running it with GUIX_OLD_HOME pointed at a manifest of our
+        choosing, against a probe root under ~/.cache.  This is strictly
+        stronger than a `guix home reconfigure' — it controls both
+        manifests, it reproduces leaps that would otherwise require real
+        generations, and it puts nothing real at risk — and it is why
+        home/main.scm is untouched until Phase 5.  The property that
+        deleted the ledger also deleted the need to reconfigure in order
+        to test.
+
+PHASE ORDER
+    Methods land in increasing order of destructiveness (D5).  Adoption
+    lands in increasing order of risk and of cross-repository dependency:
+
+        5.1  roots, and the service with no files           no dependency
+        5.2  Lossless.dll, both roots, hard-link/enforce    no dependency
+        5.3  machine dispatch in home/main.scm              giaox repository
+        5.4  conf.toml, symlink + hard-link                 needs 5.3
+
+    Step 5.2 is deliberately first among the adoptions: it is
+    dependency-free, it touches no git-tracked file, it costs zero bytes,
+    and it proves the namespace-invariant path (I13 of lsfg-vk.txt) BEFORE
+    any configuration file comes to rely on it.  Step 5.3 is
+    documents/lsfg-vk.txt Step 5.1; the dependency is one-way and crosses
+    repositories, because a machine dispatch is a property of
+    home/main.scm, not of this service.
 
 ACCEPTED LIMITATIONS
     L1  A hard link is inode-bound.  `git checkout', `git pull' and
@@ -349,73 +452,148 @@ DISCOVERY RESULTS
         only the layer does.  Any design that redirects the GUI with an
         environment variable is falsified.  It is also moot under I5.
 
+    M6  home-service-type is "the ultimate service type, the root of the
+        home service DAG", with (extensions '()), (compose identity),
+        (extend home-derivation), (default-value '()), and the comment
+        "extended by MONADIC name/item pairs" — gnu/home/services.scm
+        lines 146-158.  The deployed generation already carries eight root
+        entries: activate, channels.scm, configuration.scm, files,
+        on-first-login, profile, provenance, setup-environment.  An
+        arbitrary ninth is routine.  O1 CLOSED.
+
+    M7  CORRECTED.  guix/scripts/home.scm setenv's GUIX_NEW_HOME at three
+        sites (315/317, 464/466, 897/900) and GUIX_OLD_HOME at NONE.  The
+        producer of GUIX_OLD_HOME is the ACTIVATION WRAPPER in
+        gnu/home/services.scm (M10).  The original M7 grepped the producer
+        it expected rather than the one that exists.
+
+    M8  symlink-manager's backup idiom, verbatim: a directory
+        "<timestamp>-guix-home-legacy-configs-backup" under $HOME (lines
+        62-64); backup-file mkdir-p's the directory and the target's
+        parent, then copy-file* (lines 102-120).  A copy, not a rename.
+        S4 follows it.
+
+    M9  A scheme-file whose text contains a store path acquires that path
+        as a REFERENCE of its output.  VERIFIED: pf-outer's text is
+            (list (quote source) "/gnu/store/…-pf-inner")
+        and `guix gc --references' on pf-outer lists pf-inner.  C5 holds.
+        O3 CLOSED.
+
+    M10 compute-activation-script, verbatim (gnu/home/services.scm):
+            (old-home (or old-home-env
+                          (if (file-exists? (he-init-file he-path))
+                              (readlink he-path) #f)))
+            …
+            (setenv "GUIX_NEW_HOME" new-home)
+            (setenv "GUIX_OLD_HOME" old-home)
+            #$@gexps
+            (unless new-home-env (setenv "GUIX_NEW_HOME" #f))
+            (unless old-home-env (setenv "GUIX_OLD_HOME" #f))
+        Three consequences: both variables are set for every activation
+        gexp (C10); the home environment's own variables are in scope
+        during activation, because the wrapper first sources
+        $GUIX_NEW_HOME/setup-environment through `env -0'; and the gexps
+        run in `fold-services' order, unspecified relative to the symlink
+        manager — hence S2 aborts rather than negotiates.  O2a CLOSED.
+
+    M11 Extension values of home-service-type are MONADIC, verbatim:
+            (define (files-entry files)
+              (with-monad %store-monad
+                (return `((,home-files-directory
+                           ,(files->files-directory files))))))
+            (define (home-derivation entries mextensions)
+              (mlet %store-monad ((extensions (mapm/accumulate-builds
+                                               identity mextensions)))
+                (lower-object (file-union "home"
+                                          (append entries
+                                                  (concatenate extensions))))))
+        C11 confirmed.  home-activation-service-type, by contrast, has
+        (compose identity) and (extend compute-activation-script), whose
+        second argument is the list of extension gexps.
+
+    M12 The activation script imports nothing for us: gnu/home/services.scm
+        wraps only two of its own gexps in with-imported-modules.  Ours
+        must carry (source-module-closure '((guix build utils))) itself.
+        home-run-on-change's gexp gives the idiom for a missing old
+        generation, which C10 adopts verbatim:
+            (or (getenv "GUIX_OLD_HOME") "/gnu/store/non-existing-generation")
+
+    M13 %guix-home is (string-append %profile-directory "/guix-home") — a
+        PROFILE link with numbered generations, which `reconfigure'
+        switches BEFORE running `activate'.  ~/.guix-home is a DIFFERENT
+        symlink, pointing straight at the generation's store item
+        (verified live: ~/.guix-home -> /gnu/store/…-home), and it is
+        repointed by the symlink manager from INSIDE the activation gexps.
+        The two are unrelated, which is what made O2a look contradictory,
+        and it is why C10 forbids the ~/.guix-home fallback.
+
+    M14 (guix gexp) exports file-like?.  O5 CLOSED.
+
+VERIFICATION LESSONS
+    A check must measure exactly what its label asserts
+    (conventions.txt SECTION 4; lsfg-vk.txt I8).  Paid for here:
+      * `grep -c' counts LINES, and a word like `symlink' or `activation'
+        occurs in this module as a SYMBOL and in its comments.  A check
+        labelled "no I/O" must grep for CALLS —
+        `\((mkdir|copy-file|symlink|…)[[:space:])]' — never for mentions.
+      * A deliberate FAIL line is a legitimate assertion: "V3 admits a
+        symlink in a plain root" is verified by `raises?' returning #f.
+        State the expected failure count in the step, or a green bucket is
+        indistinguishable from a silent one.
+
 OPEN ITEMS
-    O1  That home-service-type accepts an arbitrary (NAME FILE-LIKE) root
-        entry, which is how `files', `activate', `profile' and
-        `setup-environment' reach ~/.guix-home.  Settled by Phase 0's
-        bucket; nothing depends on it until Phase 2.
-
-    O2  The GUIX_OLD_HOME / GUIX_NEW_HOME contract, and which component
-        sets it.  Settled by Phase 0's bucket.
-
-    O3  That a scheme-file whose text contains a store path acquires that
-        path as a REFERENCE of its output — C5's load-bearing property.
-        Settled by Phase 0's bucket.
-
-    O4  conf.toml carries a per-profile `gpu' key and lsfg-vk.txt OB2
-        makes it mandatory on the laptop.  The live source is therefore
-        MACHINE-SPECIFIC, which makes lsfg-vk.txt Phase 5 (machine
-        dispatch in the home configuration) a prerequisite of Phase 5
-        below on this two-machine repository.
+    All closed.  O1 (M6), O2/O2a (M7, M10, M13), O3 (M9), O4 (PHASE
+    ORDER), O5 (M14).
 
 :: PHASE 1. THE TYPE LAYER — NO FILESYSTEM EFFECT
 ================================================================================
     - Step 1.1: (giaox services provisioned-files).
-        * <provisioning-root>, <live-file>, <provisioned-file>,
-          <provisioned-files-configuration>; %home-root; root-shell-path.
-        * V1, V3, V4, V5, V6, V7, V8 raised at evaluation, each naming its
-          own identifier.  V2 is declared but enforced at activation (S9).
-        * No service type, no activation, no generation entry.  The module
-          is pure data and predicates.
-        * Imports only (guix records), (guix gexp), (srfi srfi-1),
-          (ice-9 match).  No cross-channel import, so .guix-channel is
-          untouched and `guix pull' is not exercised (lsfg-vk.txt I9).
-        Test: `guix repl -L' constructs each of the six sound cells; each
-        validator raises on its own counterexample with its identifier in
-        the message; nothing is built and nothing is written.
-COMPLETION ☐
+        * The records, %home-root, root-shell-path, the path algebra, the
+          resolution helpers.
+        * validate-provisioned-files-configuration raises V1, V3, V4, V5,
+          V6, V8, V9, V10, each naming its own identifier (D8).  V2 and V7
+          are declared and deferred to activation.
+        Verified: the module loads with no warning; the six sound cells
+        validate; a namespace-root target and a home-root target yield the
+        SAME namespace path and DIFFERENT host paths; each validator
+        raises on its own counterexample; no I/O call and no service type
+        appear in the module.
+COMPLETION ✓
 
 :: PHASE 2. OWNERSHIP, PROVEN ON THE METHOD THAT CANNOT LOSE A BYTE
 ================================================================================
-    - Step 2.0: Settle O1, O2, O3.  No repository change.
-    - Step 2.1: The generation manifest and the activation script.
-        * home-provisioned-files-service-type, extending home-service-type
-          with ("provisioned-files" …) and home-activation-service-type
-          with the script.  compose/extend present, unused (D4).
+    - Step 2.1: The manifest, the generation entry, the activation script,
+      and the service type.
+        * home-provisioned-files-service-type extends home-service-type
+          with a MONADIC (("provisioned-files" …)) entry (C11) and
+          home-activation-service-type with a PLAIN GEXP (M11).
+          compose/extend present, unused (D4).  Validation runs from both
+          extension procedures (D8).
         * Manifest: versioned (C7), resolved targets (C2), complete (C3),
           always emitted (C9).
-        * Methods: `symlink' only, both policies.  S1–S8 implemented in
-          full, because they are method-independent.
-        Test: home builds; ~/.guix-home/provisioned-files exists, is
-        version-tagged, and lists exactly the declared targets; a probe
-        symlink appears with the declared text; a second reconfigure
-        prints nothing (S8).
-    - Step 2.2: Collection, classification and generation travel.
-        * Exercised on the probe, never on a real file.
-        Test, in order: drop the entry -> collected.  Re-add; repoint the
-        link by hand; drop the entry -> NOT collected, warned (C4).
-        Re-add; `guix home roll-back' -> un-created (C3).
-        `guix home switch-generation' forward -> re-created.
-        Place a foreign regular file at the target -> backed up to
-        ~/<timestamp>-provisioned-files-backup/ and replaced (S1, S4).
-        Place a store symlink at the target -> abort, both named (S2).
+        * Method: `symlink' only, both policies; other methods refuse at
+          evaluation.  S1-S8 implemented in full, because they are
+          method-independent.
+    - Step 2.2: Collection, classification and generation travel,
+      exercised by driving the activation script directly (D9) against a
+      probe root under ~/.cache.
+        Test: the service type composes and `guix home build' emits a
+        version-tagged manifest listing exactly the declared targets,
+        empty when `files' is; first activation creates; a second run is
+        silent (S8); a foreign regular file is backed up and replaced (S1,
+        S4); a store symlink aborts (S2); dropping an `enforce' entry
+        collects its target while a dropped `seed' entry's target is left
+        (C6, S6); a target modified since provisioning is kept and
+        reported (C4); and running the old script against an arbitrary
+        manifest restores its set, which is roll-back and the leap (C3).
 COMPLETION ☐
 
 :: PHASE 3. COPY
 ================================================================================
     - Step 3.1: `copy' × {seed, enforce}.
-        * permissions (V4), atomic rename and temp sweep (S5),
-          byte-identity classification (S3), FOREIGN backup (S1).
+        * permissions (V4), V7's directory abort, atomic rename and temp
+          sweep (S5), byte-identity classification (S3), FOREIGN backup
+          (S1).
         Test: a file-like source and a <live-file> source; the home root
         and a namespace root.  Modify an `enforce' target -> backed up and
         rewritten.  Delete a `seed' target -> re-seeded (C6).  Drop an
@@ -426,7 +604,7 @@ COMPLETION ☐
 :: PHASE 4. HARD-LINK
 ================================================================================
     - Step 4.1: `hard-link' × {seed, enforce}.
-        * S9's device check; re-link on inode drift; inode-identity
+        * S9's device check (V2); re-link on inode drift; inode-identity
           classification; collection unlinks only when the inodes agree.
         * The live source is canonicalised before link(2), which does not
           dereference a symlink.
@@ -439,20 +617,30 @@ COMPLETION ☐
 
 :: PHASE 5. ADOPTION
 ================================================================================
+    From here the channel must be pushed and pulled: home/main.scm imports
+    the module, and a deployed `guix home reconfigure' resolves it from
+    the PULLED revision, not from -L (lsfg-vk.txt I6, I9).
+
     - Step 5.1: home/main.scm gains %steam-sandbox, derives
-      GUIX_SANDBOX_HOME from it, and instantiates the service with
-      (files '()).
+      GUIX_SANDBOX_HOME from it with root-shell-path, and instantiates the
+      service with (files '()).
         Test: home builds; ~/.guix-home/provisioned-files exists and is
         empty; GUIX_SANDBOX_HOME is byte-identical to its previous value.
-    - Step 5.2: lsfg-vk's three provisioned files.  Requires O4.
-        * conf.toml moves into the configuration repository, under machine
-          dispatch.
-        * symlink/enforce at home:.config/lsfg-vk/conf.toml
-        * hard-link/enforce at steam-sandbox:.config/lsfg-vk/conf.toml
-        * hard-link/enforce at {home,steam-sandbox}:
-          .local/share/lsfg-vk/Lossless.dll, sourced from the sandbox's
-          Steam tree, which makes the `dll' key namespace-invariant (I2,
-          I8).
+    - Step 5.2: Lossless.dll.  hard-link/enforce, source
+      (live-file (root 'steam-sandbox) (path ".local/share/Steam/…")),
+      target ".local/share/lsfg-vk/Lossless.dll", roots
+      '(home steam-sandbox).  No machine dispatch, no git-tracked file, no
+      GUI, zero bytes.
+        Test: three names, one inode.  The host's lsfg-vk-cli finds the
+        DLL at the namespace-invariant path; a Steam game does too, with
+        the same `dll' string in its own conf.toml.  This proves I13 of
+        lsfg-vk.txt before any configuration rides on it.
+    - Step 5.3: Machine dispatch in home/main.scm.  This is
+      documents/lsfg-vk.txt Step 5.1 and lives in the giaox repository.
+    - Step 5.4: conf.toml.  It moves into the configuration repository
+      under machine dispatch; symlink/enforce at
+      home:".config/lsfg-vk/conf.toml"; hard-link/enforce at
+      steam-sandbox:".config/lsfg-vk/conf.toml".
         Test: one inode, three names.  A GUI save changes the bytes seen
         inside the sandbox with no reconfigure.  A Proton game logs the
         edited profile.  `guix home roll-back' restores the prior shape.
@@ -470,8 +658,8 @@ COMPLETION ☐
 
 :: PHASE 7. DIRECTORIES — ON DEMAND ONLY
 ================================================================================
-    - Step 7.1: `copy' of a tree, leaf-wise classification and collection.
-      Not built until a consumer exists (D6).
+    - Step 7.1: `copy' of a tree, leaf-wise classification and collection;
+      V7 relaxes.  Not built until a consumer exists (D6).
 COMPLETION ☐
 
 ================================================================================

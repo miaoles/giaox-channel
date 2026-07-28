@@ -463,7 +463,8 @@ COMPLETION ✓
     home-profile-service-type; home/main.scm instantiated it.
 
     Steps 3.2 and 3.3 — declarative configuration content, a TOML
-    serializer, seed and declarative modes — are CANCELLED by D9.  The
+    ser
+ializer, seed and declarative modes — are CANCELLED by D9.  The
     file is a live artifact; the mechanism that carries it reads none of
     its bytes.  What remained of the service was a package installation.
 
@@ -499,11 +500,15 @@ COMPLETION — RETIRED
 
     - Step 5.1: Machine dispatch in the home configuration, mirroring the
       system configuration's mechanism, carrying per-machine home values
-      generally.
+      generally.  This step is also
+      documents/provisioned-files.txt Step 5.3, and it gates that
+      document's Step 5.4.
     - Step 5.2: The per-machine conf.toml.  The laptop's gpu value is
       proven: "NVIDIA RTX A2000 Laptop GPU".  The desktop's is to be read
       from the loader, not assumed.  The dispatched path is what
-      documents/provisioned-files.txt Phase 5.2 provisions.
+      documents/provisioned-files.txt Step 5.4 provisions; its `dll' key
+      is the namespace-invariant path that document's Step 5.2 establishes
+      first.
 
 :: PHASE 6. OUTPUT SPLIT
 ================================================================================
