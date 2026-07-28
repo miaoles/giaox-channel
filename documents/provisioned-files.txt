@@ -113,7 +113,8 @@ KEY INVARIANTS
     I4  A store symlink is mode 444 on a read-only filesystem.  No file
         that an application writes may live behind one.  This holds on the
         host, with no container in sight, and it is the reason
-        home-files-service-type cannot serve these cases.
+        home-files-service-type cannot serve these cases.  It is also why
+        `copy' sets #o644 rather than preserving the source's mode (V4).
 
     I5  A HARD LINK IS THE KERNEL'S MIRROR.  It is exact, instantaneous,
         free, and agnostic to which name is written — provided no writer
@@ -149,13 +150,18 @@ VALIDATION RULES — loud, with the rule's identifier in the message
     V3  `symlink' only where (path R) = (mount R).  See I3.
     V4  `permissions' only with `copy', and only #f or an octal mode.  A
         hard link shares the source's mode, so setting it would mutate the
-        source; a symlink has none.  Supplying it with a link method is an
-        error, not a no-op.
+        source; a symlink has none.  When `copy' WRITES a file it sets the
+        mode to PERMISSIONS, or to #o644 when that is #f — never to the
+        source's mode, because a store source is 444 and a seeded default
+        must be writable (I4).  `enforce' asserts CONTENT, not mode: see
+        L8.
     V5  TARGETs are clean relative paths: no leading '/', no '~', no '.'
-        or '..' component.  Root PATHs, root MOUNTs and unrooted
-        <live-file> paths are '~'-anchored or absolute.  A rooted
-        <live-file> path is relative.  "$HOME" is not a path syntax.
-        Expansion happens at activation, never by `getenv' at evaluation.
+        or '..' component, and no basename beginning with the reserved
+        prefix ".provisioned-files-tmp-" (S5).  Root PATHs, root MOUNTs
+        and unrooted <live-file> paths are '~'-anchored or absolute.  A
+        rooted <live-file> path is relative.  "$HOME" is not a path
+        syntax.  Expansion happens at activation, never by `getenv' at
+        evaluation.
     V6  No two entries may resolve to the same target.  Comparison is on
         the normalised '~'-prefixed absolute path, so two roots that
         overlap — home:"Sandbox/.config/x" and steam-sandbox:".config/x" —
@@ -174,17 +180,18 @@ VALIDATION RULES — loud, with the rule's identifier in the message
     ACTIVATION TIME, because the fact is a runtime fact and no honest
     check can assert it earlier:
 
-    V2  `hard-link' requires source and target on one device.  Loud
-        failure, never a silent fallback to `copy'.
-    V7  Version 1 provisions REGULAR FILES.  A directory source aborts.  A
-        <live-file> source need not exist when the configuration is
-        evaluated — the sandbox may not yet — so its type cannot be known
-        then.  See D6.
+    V2  `hard-link' requires source and target on one device.  The check
+        compares the CANONICALISED source's st_dev with the TARGET'S
+        PARENT DIRECTORY's, because the target may not exist yet.  Loud
+        failure (S9), never a silent fallback to `copy'.
+    V7  Version 1 provisions REGULAR FILES.  A `copy' or `hard-link'
+        source that is a directory aborts, as does one that does not
+        exist.  A <live-file> source need not exist when the configuration
+        is evaluated — the sandbox may not yet — so its type cannot be
+        known then.  See D6.
 
-    AND, TEMPORARILY, at evaluation: an entry whose method is not yet
-    implemented refuses to build.  %implemented-methods shrinks the gap by
-    one symbol in each of Phases 3 and 4.  A build-time refusal beats a
-    runtime abort.
+    Both run inside assert-source!, which every destructive branch calls
+    BEFORE its first destructive step (S10).
 
 SAFETY INVARIANTS — activation time
     S1  BACKUPS APPLY ONLY TO `enforce'.  `seed' never writes over
@@ -205,30 +212,53 @@ SAFETY INVARIANTS — activation time
         no backup; FOREIGN -> back up, then write.
         `seed':    ABSENT -> write; anything else -> nothing.
         The shape test per method:
-            copy       byte-identical to the designated source
-            hard-link  same inode as the designated source
+            copy       byte-identical to the designated source; the mode
+                       is not part of the shape (L8)
+            hard-link  the same (st_dev, st_ino) as the designated source,
+                       which `stat' resolves exactly as create! did with
+                       canonicalize-path.  IDENTITY, NOT CONTENT: a target
+                       with the same bytes but a different inode is
+                       FOREIGN, and will be re-linked
             symlink    link text equals the designated source path
-        An unimplemented method answers #f, which can only leak (C4).
     S4  BACKUPS go to ~/<timestamp>-provisioned-files-backup/, mirroring
         the target's path relative to $HOME (or its absolute path with the
         leading slash stripped), so targets in different roots cannot
-        collide.  The idiom is home-symlink-manager's own (M8): a
+        collide.  The structure is home-symlink-manager's (M8): a
         timestamped directory, mkdir-p of the directory and of the
-        target's parent, then a COPY — not a rename, because one
-        filesystem cannot be assumed.  Never overwritten, never aborting.
-    S5  `copy' is atomic: a temp sibling with a reserved prefix, then
-        rename.  This detaches any hard link made to that target by a
-        third party — and that is correct.  `hard-link' is the method for
-        identity; `copy' is the method for content.  Stale temps are
-        swept.
+        target's parent.  A regular target is moved by HARD LINK when the
+        backup directory is on its filesystem, and copied only when it is
+        not — so a backup preserves the inode at zero cost, which is what
+        makes L9 affordable.  Never overwritten: link(2) on an existing
+        name fails loudly.
+    S5  `copy' IS ATOMIC AND LEAVES NO RESIDUE TO SWEEP.  Content is
+        written to a sibling whose name is DETERMINISTIC,
+        ".provisioned-files-tmp-<basename>", then chmod'ed, then renamed
+        over the target.  A crash can therefore leave exactly one of:
+          * a temp sibling and an UNCHANGED target — in which case the
+            target no longer matches its source, so the next activation
+            rewrites it and consumes the temp; or
+          * the new target and no temp, because the rename was last.
+        There is nothing a sweep would find that the next write does not
+        already remove, so THERE IS NO SWEEP.  Collection removes a
+        dropped target's temp sibling too, and V5 keeps the prefix out of
+        the target namespace, so a temp can never be another entry's
+        target.
+        The rename detaches any hard link a third party made to the target
+        — and that is correct.  `hard-link' is the method for identity;
+        `copy' is the method for content.
     S6  COLLECTION PRECEDES MATERIALISATION.  Names are freed before they
         are needed.
     S7  Parent directories are created (#o755) and NEVER removed.
     S8  ACTIVATION IS CONVERGENT, not merely idempotent.  A second run, or
         a resumed interrupted run, writes nothing and reports nothing.
         This follows from ALREADY (S3).
-    S9  V2's device check.  A `hard-link' whose source and target differ
-        in st_dev aborts with both paths named.
+    S9  V2's device check, raised with both paths named.
+    S10 NEVER DESTROY BEFORE YOU KNOW YOU CAN REPLACE.  `create!' owns
+        replacement — symlink(2) and link(2) refuse an existing name,
+        rename(2) replaces atomically — and assert-source! runs at the top
+        of create! AND at the top of the FOREIGN branch, before backup!.
+        A missing source, a directory source, or a cross-device hard link
+        is discovered while the target is still intact.
 
 OWNERSHIP AND GENERATIONS
     There is NO LEDGER.  The service extends home-service-type with one
@@ -241,7 +271,8 @@ OWNERSHIP AND GENERATIONS
         target, method, policy, permissions, source designation, and the
         root name as a diagnostic label.  It cannot record inodes, digests
         or mtimes.  Consequence: "did someone modify this?" is answered by
-        comparing the target against the source the OLD RECORD DESIGNATES.
+        comparing the target against the source the OLD RECORD DESIGNATES
+        — and, for `hard-link', that is why a stale link is FOREIGN (L9).
 
     C2  Targets in the manifest are fully resolved, '~'-prefixed absolute
         paths.  Root names are compiled away.  Moving or renaming a root
@@ -256,16 +287,17 @@ OWNERSHIP AND GENERATIONS
         D9, what makes the whole service testable without a reconfigure.
 
     C4  COLLECTION MAY LEAK; IT MAY NEVER DELETE.  Every undecidable case
-        — source vanished, inode drifted, content diverged, method not yet
-        implemented — leaves the file and warns.
+        — source vanished, inode drifted, content diverged — leaves the
+        file and warns.
 
     C5  Recording a store source's path in the manifest text makes that
-        source a REFERENCE of the generation.  VERIFIED (M9).  The old
-        generation is always alive during activation.  The byte comparison
-        C1 forces is therefore always possible for store sources.  For a
-        live source the comparison is against the source AS IT IS NOW: a
-        source that has legitimately changed yields a mismatch, hence a
-        leak, never a deletion.
+        source a REFERENCE of the generation.  VERIFIED twice: by M9, and
+        by `guix gc --references' on a real configuration's manifest.  The
+        old generation is always alive during activation.  The byte
+        comparison C1 forces is therefore always possible for store
+        sources.  For a live source the comparison is against the source
+        AS IT IS NOW: a source that has legitimately changed yields a
+        mismatch, hence a leak or a backup, never a deletion.
 
     C6  ONLY `enforce' RECORDS ARE COLLECTED.  A dropped `seed' target is,
         by definition, the application's: left and forgotten.  Deleting a
@@ -316,15 +348,15 @@ MANIFEST FORMAT
         ROOT         symbol; diagnostic only, it has no semantics (C2)
         METHOD       copy | hard-link | symlink
         POLICY       seed | enforce
-        PERMISSIONS  integer or #f
+        PERMISSIONS  integer or #f, written in DECIMAL (#o600 reads 384)
         KIND         store | live
         SOURCE       string: a store path (KIND=store), or a '~'-prefixed
                      or absolute host path (KIND=live)
 
     The store path appears as a literal string, which is what makes the
-    source a reference of the generation (C5, M9).  The version is checked
-    on every read and an unrecognised one aborts (C7).  Version 1 carries
-    every field Phases 2 through 4 need; no bump is foreseen.
+    source a reference of the generation (C5).  The version is checked on
+    every read and an unrecognised one aborts (C7).  Version 1 carries
+    every field every method needs; no bump is foreseen.
 
 DECISIONS
     D1  NO LEDGER.  Ownership is generation diffing.  Rejected: a state
@@ -350,8 +382,10 @@ DECISIONS
 
     D5  METHODS LAND IN INCREASING ORDER OF DESTRUCTIVENESS: symlink,
         copy, hard-link.  The ownership machinery is proven on a method
-        that cannot lose a byte before one that can.  This governs the
-        phase order and is not negotiable.
+        that cannot lose a byte before one that can.  During Phases 2 and
+        3 an IMPL guard refused the unimplemented methods at evaluation;
+        with all three implemented the guard and its constant are gone,
+        because V10 already closes the enumeration.
 
     D6  DIRECTORIES ARE DEFERRED, NOT DESIGNED OUT.  No consumer exists.
         The records do not change when one appears; only the materialiser
@@ -405,7 +439,8 @@ ACCEPTED LIMITATIONS
         `git stash' rewriting a tracked source detach every hard link to
         it until the next activation, which re-links.  A path-bound
         symlink at a host name is unaffected — which is precisely why the
-        two roots use different methods (I6).
+        two roots use different methods (I6).  See L9 for what that
+        re-link costs.
 
     L2  A <live-file> source is not reproducible (I7).
 
@@ -417,12 +452,30 @@ ACCEPTED LIMITATIONS
     L5  An `enforce' collection whose source has vanished or drifted
         leaks, loudly (C4).
 
-    L6  A cross-device `hard-link' aborts (S9).  The remedy is the user's
-        explicit choice of `copy', never an implicit downgrade.
+    L6  A cross-device `hard-link' aborts (S9, V2).  The remedy is the
+        user's explicit choice of `copy', never an implicit downgrade.
 
     L7  A target reached through a SYMLINKED PARENT is written through
         that symlink.  Only the final component is protected (S2).  This
         is ordinary Unix behaviour and is usually what was meant.
+
+    L8  `enforce' asserts CONTENT, not mode.  A `copy' target whose bytes
+        match its source but whose mode was changed by hand is ALREADY,
+        and is left alone.  Backing up and rewriting byte-identical
+        content to correct one mode bit is a worse trade than leaving it.
+        The mode is set whenever the file is written.
+
+    L9  A HARD-LINK TARGET WHOSE SOURCE INODE WAS REPLACED IS FOREIGN.
+        When `git pull' or a package update rewrites a source by rename,
+        the target still names the OLD inode.  No record can distinguish
+        that from a file the user put there, because C1 forbids recording
+        inodes.  It is therefore backed up and re-linked.  This is the
+        EXPECTED path after a source is rewritten, and the backup is how
+        the previous content survives — the old inode's last name was
+        ours.  S4 moves it by hard link, so the backup costs zero bytes;
+        what it costs is one dated directory under $HOME per such
+        activation.  A `seed' hard link in the same situation is left
+        pointing at the old inode, which is precisely what `seed' means.
 
 DISCOVERY RESULTS
     M1  --share=$GUIX_SANDBOX_HOME=$HOME.  Read from the deployed
@@ -470,8 +523,8 @@ DISCOVERY RESULTS
     M8  symlink-manager's backup idiom, verbatim: a directory
         "<timestamp>-guix-home-legacy-configs-backup" under $HOME (lines
         62-64); backup-file mkdir-p's the directory and the target's
-        parent, then copy-file* (lines 102-120).  A copy, not a rename.
-        S4 follows it.
+        parent, then copy-file* (lines 102-120).  S4 follows the
+        structure, and improves on the copy: see L9.
 
     M9  A scheme-file whose text contains a store path acquires that path
         as a REFERENCE of its output.  VERIFIED: pf-outer's text is
@@ -529,6 +582,11 @@ DISCOVERY RESULTS
 
     M14 (guix gexp) exports file-like?.  O5 CLOSED.
 
+    M15 Linux's link(2) does NOT dereference a symbolic link oldpath: it
+        would create a hard link to the SYMLINK's inode.  create! therefore
+        canonicalize-path's the source, and matches? uses `stat', which
+        follows, so the two agree on which inode is meant.
+
 VERIFICATION LESSONS
     A check must measure exactly what its label asserts
     (conventions.txt SECTION 4; lsfg-vk.txt I8).  Paid for here:
@@ -540,6 +598,12 @@ VERIFICATION LESSONS
         symlink in a plain root" is verified by `raises?' returning #f.
         State the expected failure count in the step, or a green bucket is
         indistinguishable from a silent one.
+      * `error' prints Guile's "In procedure error:" header above the
+        message.  That is loud, which is the requirement.  A check on an
+        abort must match the MESSAGE, not the first line of output.
+      * Guile's ";;; note: source file … newer than compiled …" is a NOTE,
+        not a warning.  A bucket grepping for `warning' will not see it,
+        and should not.
 
 OPEN ITEMS
     All closed.  O1 (M6), O2/O2a (M7, M10, M13), O3 (M9), O4 (PHASE
@@ -547,12 +611,9 @@ OPEN ITEMS
 
 :: PHASE 1. THE TYPE LAYER — NO FILESYSTEM EFFECT
 ================================================================================
-    - Step 1.1: (giaox services provisioned-files).
-        * The records, %home-root, root-shell-path, the path algebra, the
-          resolution helpers.
-        * validate-provisioned-files-configuration raises V1, V3, V4, V5,
-          V6, V8, V9, V10, each naming its own identifier (D8).  V2 and V7
-          are declared and deferred to activation.
+    - Step 1.1: The records, %home-root, root-shell-path, the path
+      algebra, the resolution helpers, and
+      validate-provisioned-files-configuration.
         Verified: the module loads with no warning; the six sound cells
         validate; a namespace-root target and a home-root target yield the
         SAME namespace path and DIFFERENT host paths; each validator
@@ -562,57 +623,59 @@ COMPLETION ✓
 
 :: PHASE 2. OWNERSHIP, PROVEN ON THE METHOD THAT CANNOT LOSE A BYTE
 ================================================================================
-    - Step 2.1: The manifest, the generation entry, the activation script,
-      and the service type.
-        * home-provisioned-files-service-type extends home-service-type
-          with a MONADIC (("provisioned-files" …)) entry (C11) and
-          home-activation-service-type with a PLAIN GEXP (M11).
-          compose/extend present, unused (D4).  Validation runs from both
-          extension procedures (D8).
-        * Manifest: versioned (C7), resolved targets (C2), complete (C3),
-          always emitted (C9).
-        * Method: `symlink' only, both policies; other methods refuse at
-          evaluation.  S1-S8 implemented in full, because they are
-          method-independent.
-    - Step 2.2: Collection, classification and generation travel,
-      exercised by driving the activation script directly (D9) against a
-      probe root under ~/.cache.
-        Test: the service type composes and `guix home build' emits a
-        version-tagged manifest listing exactly the declared targets,
-        empty when `files' is; first activation creates; a second run is
-        silent (S8); a foreign regular file is backed up and replaced (S1,
-        S4); a store symlink aborts (S2); dropping an `enforce' entry
-        collects its target while a dropped `seed' entry's target is left
-        (C6, S6); a target modified since provisioning is kept and
-        reported (C4); and running the old script against an arbitrary
-        manifest restores its set, which is roll-back and the leap (C3).
-COMPLETION ☐
+    - Steps 2.1, 2.2: The manifest, the generation entry, the activation
+      script, the service type; `symlink' only, both policies; S1-S8 in
+      full; collection and generation travel driven directly (D9).
+        Verified: the service type extends (home home-activation) and its
+        default value validates; `guix home build' emits
+        <generation>/provisioned-files, version-tagged, listing exactly
+        the declared targets, and (files ()) when there are none; first
+        activation creates and seeds; the second run is silent (S8); a
+        foreign regular file is backed up and replaced (S1, S4); a store
+        symlink aborts with exit 1 and touches nothing (S2); dropping
+        every entry collects the `enforce' target and leaves the `seed'
+        target (C6, S6); a target repointed by hand is kept and reported
+        (C4); and running the old script against an arbitrary manifest
+        restores its set, which is roll-back and the leap, performed with
+        no generation (C3).
+COMPLETION ✓
 
 :: PHASE 3. COPY
 ================================================================================
-    - Step 3.1: `copy' × {seed, enforce}.
-        * permissions (V4), V7's directory abort, atomic rename and temp
-          sweep (S5), byte-identity classification (S3), FOREIGN backup
-          (S1).
-        Test: a file-like source and a <live-file> source; the home root
-        and a namespace root.  Modify an `enforce' target -> backed up and
-        rewritten.  Delete a `seed' target -> re-seeded (C6).  Drop an
-        `enforce' entry whose target the user modified -> left, warned.
-        Interrupt between temp and rename -> next run converges silently.
-COMPLETION ☐
+    - Step 3.1: `copy' × {seed, enforce}: byte comparison, the atomic
+      deterministic temp sibling (S5), chmod to PERMISSIONS or #o644, V7,
+      and S10's assertion ordering.
+        Verified: the manifest carries a store path and `guix gc
+        --references' names it, so C5 holds on a real configuration; a 444
+        store source lands at mode 644 and a declared #o600 at 600; a
+        changed store source is OURS and is updated with no backup; a
+        stale temp is consumed, none remains; a hand-edited `enforce'
+        target is backed up, rewritten, and the edit survives in the
+        backup; a deleted `seed' target is re-seeded; an `enforce' entry
+        dropped after its target was edited is kept and warned, and
+        dropped while clean is collected beside a dropped symlink, while
+        the `seed' target survives both drops; a directory source and a
+        missing source abort with exit 1 and create nothing.
+COMPLETION ✓
 
 :: PHASE 4. HARD-LINK
 ================================================================================
     - Step 4.1: `hard-link' × {seed, enforce}.
-        * S9's device check (V2); re-link on inode drift; inode-identity
-          classification; collection unlinks only when the inodes agree.
-        * The live source is canonicalised before link(2), which does not
-          dereference a symlink.
-        Test: `stat -c %i' agrees across every provisioned name.  Break
-        the link by hand -> next activation re-links and says so.  Rewrite
-        the source's inode (git-style) -> `enforce' re-links; drop the
-        entry instead -> left, warned.  A cross-device entry aborts with
-        both paths named.
+        * matches? compares (st_dev, st_ino); create! canonicalises before
+          link(2) (M15); V2/S9's device check compares the canonicalised
+          source with the target's PARENT, inside assert-source! (S10).
+        * backup! moves a regular target by hard link when it can (S4),
+          which is what makes L9 cost zero bytes.
+        * The IMPL guard and %implemented-methods are deleted (D5).
+        Test: one inode across every provisioned name, and the link count
+        to prove it.  A target replaced by a byte-identical COPY is still
+        FOREIGN and is re-linked — identity, not content.  A source
+        rewritten by rename, as git and Steam do: `enforce' re-links both
+        roots and the backup holds the old content, while the `seed' name
+        keeps the old inode and the old bytes (L9, C6).  Dropped while
+        stale -> kept and warned (C4); dropped while clean -> collected,
+        and the emptied directory survives (S7).  A cross-device target
+        aborts naming both paths; a directory source aborts.
 COMPLETION ☐
 
 :: PHASE 5. ADOPTION
@@ -623,9 +686,11 @@ COMPLETION ☐
 
     - Step 5.1: home/main.scm gains %steam-sandbox, derives
       GUIX_SANDBOX_HOME from it with root-shell-path, and instantiates the
-      service with (files '()).
+      service with (files '()).  It ships ALONE: the first real generation
+      to carry a manifest carries an empty one.
         Test: home builds; ~/.guix-home/provisioned-files exists and is
-        empty; GUIX_SANDBOX_HOME is byte-identical to its previous value.
+        (files ()); GUIX_SANDBOX_HOME is byte-identical to its previous
+        value.
     - Step 5.2: Lossless.dll.  hard-link/enforce, source
       (live-file (root 'steam-sandbox) (path ".local/share/Steam/…")),
       target ".local/share/lsfg-vk/Lossless.dll", roots

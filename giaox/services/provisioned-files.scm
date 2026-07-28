@@ -217,6 +217,12 @@
 ;;; Validation.  V2 and V7 are runtime facts and are enforced at activation.
 ;;;
 
+;; Reserved: `copy' writes through a sibling of this name (S5).  V5 keeps it
+;; out of the target namespace, so a temp can never be another entry's target.
+(define %temp-file-prefix ".provisioned-files-tmp-")
+
+(define %default-permissions #o644)
+
 (define (validate-provisioning-root root)
   (unless (symbol? (provisioning-root-name root))
     (provisioning-error "V10" "root name is not a symbol:"
@@ -258,6 +264,9 @@
 
     (unless (relative-path? target)
       (provisioning-error "V5" "target is not a clean relative path:" target))
+    (when (string-prefix? %temp-file-prefix (basename target))
+      (provisioning-error "V5" "target uses the reserved temp-file prefix:"
+                          target))
 
     (when (live-source? source)
       (let ((path (live-file-path source)))
@@ -343,10 +352,6 @@ the rule."
 (define %manifest-version 1)
 (define %manifest-name "provisioned-files")
 
-;; Phase 2 implements one method; the guard below is removed as Phases 3 and 4
-;; land the others.  A build-time refusal beats a runtime abort.
-(define %implemented-methods '(symlink))
-
 (define (provisioned-files-records config)
   "Validate CONFIG and return one record gexp per (entry, root)."
   (validate-provisioned-files-configuration config)
@@ -383,21 +388,16 @@ the rule."
 ;;; Activation.  Collection precedes materialisation (S6); classification is
 ;;; four-way against both records (S3); only `enforce' backs up (S1) and only
 ;;; `enforce' is collected (C6); nothing is deleted that cannot be proven ours
-;;; (C4).  The old generation is $GUIX_OLD_HOME and nothing else (C10).
+;;; (C4); no precondition is discovered after a destructive step (S10).  The
+;;; old generation is $GUIX_OLD_HOME and nothing else (C10).
 ;;;
 
 (define (provisioned-files-activation config)
   (let ((records (provisioned-files-records config)))
-    (for-each (lambda (file)
-                (unless (memq (provisioned-file-method file) %implemented-methods)
-                  (provisioning-error "PHASE 2"
-                                      "only the symlink method is implemented; method:"
-                                      (provisioned-file-method file))))
-              (provisioned-files-configuration-files config))
-
     (with-imported-modules (source-module-closure '((guix build utils)))
       #~(begin
           (use-modules (guix build utils)
+                       (ice-9 binary-ports)
                        (ice-9 match)
                        (srfi srfi-1))
 
@@ -427,28 +427,102 @@ the rule."
             (let ((st (lstat* path)))
               (and st (stat:type st))))
 
-          ;; The shape test of S3, per method.  An unimplemented method
-          ;; answers #f, which can only cause a leak, never a deletion (C4).
+          (define (device-of path) (stat:dev (stat path)))
+
+          (define (temp-path target)
+            (string-append (dirname target) "/"
+                           #$%temp-file-prefix (basename target)))
+
+          (define (regular-source! source)
+            (let ((st (false-if-exception (stat source))))
+              (cond ((not st)
+                     (error "provisioned-files: source does not exist" source))
+                    ((not (eq? (stat:type st) 'regular))
+                     (error "provisioned-files: V7: source is not a regular file"
+                            source))
+                    (else #t))))
+
+          ;; Every precondition an entry has, asserted before the first
+          ;; destructive call on its behalf (S10).  TARGET's parent exists.
+          (define (assert-source! method target source)
+            (case method
+              ((copy) (regular-source! source))
+              ((hard-link)
+               (regular-source! source)
+               (let ((canonical (canonicalize-path source)))
+                 (unless (= (device-of canonical) (device-of (dirname target)))
+                   (error "provisioned-files: S9: hard link across filesystems"
+                          canonical target))))
+              (else #t)))
+
+          (define (files-equal? target source)
+            (let ((ts (lstat* target))
+                  (ss (false-if-exception (stat source))))
+              (and ts ss
+                   (eq? (stat:type ts) 'regular)
+                   (eq? (stat:type ss) 'regular)
+                   (= (stat:size ts) (stat:size ss))
+                   (call-with-input-file target
+                     (lambda (target-port)
+                       (call-with-input-file source
+                         (lambda (source-port)
+                           (let loop ()
+                             (let ((a (get-bytevector-n target-port 65536))
+                                   (b (get-bytevector-n source-port 65536)))
+                               (cond ((and (eof-object? a) (eof-object? b)) #t)
+                                     ((or (eof-object? a) (eof-object? b)) #f)
+                                     ((equal? a b) (loop))
+                                     (else #f)))))
+                         #:binary #t))
+                     #:binary #t))))
+
+          ;; The shape test of S3, per method.  `hard-link' is identity, not
+          ;; content: one inode on one device.  `stat' follows, matching what
+          ;; create! linked after canonicalisation.
           (define (matches? method target source)
             (case method
               ((symlink)
                (and (eq? (file-type* target) 'symlink)
                     (string=? (readlink target) source)))
+              ((copy) (files-equal? target source))
+              ((hard-link)
+               (let ((ts (lstat* target))
+                     (ss (false-if-exception (stat source))))
+                 (and ts ss
+                      (= (stat:dev ts) (stat:dev ss))
+                      (= (stat:ino ts) (stat:ino ss)))))
               (else #f)))
-
-          (define (create! method target source permissions)
-            (case method
-              ((symlink) (symlink source target))
-              (else (error "provisioned-files: method not implemented" method))))
-
-          (define (store-symlink? target)
-            (and (eq? (file-type* target) 'symlink)
-                 (string-prefix? "/gnu/store/" (readlink target))))
 
           (define (remove! target)
             (if (eq? (file-type* target) 'directory)
                 (delete-file-recursively target)
                 (delete-file target)))
+
+          ;; create! owns replacement: symlink(2) and link(2) refuse an
+          ;; existing name, and rename(2) replaces atomically, so a failed copy
+          ;; leaves the old content intact rather than a hole.  link(2) does
+          ;; not dereference a symlink, hence canonicalize-path.
+          (define (create! method target source permissions)
+            (assert-source! method target source)
+            (case method
+              ((symlink)
+               (when (lstat* target) (remove! target))
+               (symlink source target))
+              ((copy)
+               (let ((temporary (temp-path target)))
+                 (when (lstat* temporary) (remove! temporary))
+                 (copy-file source temporary)
+                 (chmod temporary (or permissions #$%default-permissions))
+                 (rename-file temporary target)))
+              ((hard-link)
+               (when (lstat* target) (remove! target))
+               (link (canonicalize-path source) target))
+              (else
+               (error "provisioned-files: unknown method" method))))
+
+          (define (store-symlink? target)
+            (and (eq? (file-type* target) 'symlink)
+                 (string-prefix? "/gnu/store/" (readlink target))))
 
           (define (backup! target)
             (let* ((prefix (string-append %home "/"))
@@ -462,8 +536,13 @@ the rule."
                            (delete-file target))
                 ((directory) (copy-recursively target destination)
                              (delete-file-recursively target))
-                (else (copy-file target destination)
-                      (delete-file target)))
+                (else
+                 ;; A hard link preserves the inode at no cost; copy only when
+                 ;; the backup directory is on another filesystem (S4).
+                 (if (= (device-of target) (device-of (dirname destination)))
+                     (link target destination)
+                     (copy-file target destination))
+                 (delete-file target)))
               (say "backed up ~a to ~a" target destination)))
 
           (define (read-manifest directory)
@@ -496,6 +575,8 @@ the rule."
                       (cond ((not (lstat* t)) #t)
                             ((ours? record t)
                              (remove! t)
+                             (let ((temporary (temp-path t)))
+                               (when (lstat* temporary) (remove! temporary)))
                              (say "collected ~a" t))
                             (else
                              (say "kept, modified since provisioned: ~a" t))))))))
@@ -522,7 +603,6 @@ the rule."
                       (create! method t s permissions)
                       (say "created ~a" t))
                      ((and previous (ours? previous t))      ; OURS
-                      (remove! t)
                       (create! method t s permissions)
                       (say "updated ~a" t))
                      (else                                   ; FOREIGN
@@ -530,6 +610,7 @@ the rule."
                         (error (string-append
                                 "provisioned-files: S2: " t
                                 " is a symlink into the store; home-files owns it")))
+                      (assert-source! method t s)
                       (backup! t)
                       (create! method t s permissions)
                       (say "created ~a" t)))))))
